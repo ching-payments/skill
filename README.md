@@ -9,7 +9,7 @@ Works with Claude Code and Cursor. Triggers on requests like "integrate CHING", 
 Use the CHING CLI. It downloads the latest skill from this repo, detects which AI tools you have on your machine, and drops the files in the right place.
 
 ```bash
-npx @ching-payments/cli skills install
+npx @ching-payments/cli skill install
 ```
 
 The CLI will ask:
@@ -21,10 +21,10 @@ The CLI will ask:
 
 ```bash
 # Install globally for Claude Code only, overwrite if already present
-npx @ching-payments/cli skills install --global --target claude --force
+npx @ching-payments/cli skill install --global --target claude --force
 
 # Install in the current project for both Claude Code and Cursor
-npx @ching-payments/cli skills install --project --target claude,cursor
+npx @ching-payments/cli skill install --project --target claude,cursor
 ```
 
 | Flag | Effect |
@@ -39,13 +39,13 @@ npx @ching-payments/cli skills install --project --target claude,cursor
 
 ```bash
 # Re-run install to pull the latest version
-npx @ching-payments/cli skills install --force
+npx @ching-payments/cli skill install --force
 
 # See where the skill is currently installed
-npx @ching-payments/cli skills list
+npx @ching-payments/cli skill list
 
 # Remove
-npx @ching-payments/cli skills uninstall
+npx @ching-payments/cli skill uninstall
 ```
 
 After installing or updating, restart your AI tool (or open a new chat) to pick up the new skill.
