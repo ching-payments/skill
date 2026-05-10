@@ -55,11 +55,11 @@ Mode toggle: send `X-Livemode: false` to force test mode (live keys default to l
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/checkout_sessions` | Create. Required: `mode` (`single_price` or `cart`), `success_url`, `cancel_url`. Either `price` (single_price) or `line_items` (cart). Optional: `customer`, `create_document` (default true), `metadata`. Returns `{ id, url, expires_at }`. TTL 30 minutes. |
+| POST | `/checkout_sessions` | Create. Required: `customer` (`cus_*` — must already exist; no auto-create), `success_url`, `cancel_url`, and **exactly one** of `price` (single one-time or recurring price id) or `line_items` (ad-hoc cart). Optional: `create_document` (default true). There is **no `mode` field** — the branch is determined by which of `price`/`line_items` is sent; sending both is rejected with 400 `invalid_request`. Returns `{ id, url, expires_at }`. TTL 30 minutes. |
 | GET | `/checkout_sessions/:id/public` | Public, no auth. Used by the hosted page. |
 | POST | `/checkout_sessions/:id/confirm` | Public. Submitted by the hosted page after the customer pays. |
 
-`line_items` shape (for `mode: "cart"`):
+`line_items` shape (when using the cart branch):
 
 ```json
 [

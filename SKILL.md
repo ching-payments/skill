@@ -187,14 +187,27 @@ There are no idempotency keys yet; deduplicate writes on your side using a datab
 
 Server-side, create a session and redirect the user to the returned `url`. The `secured.ching.co.il` page handles cards, Bit, Apple Pay, Google Pay, PayBox, and bank transfer.
 
+A `customer` (`cus_*`) must exist before you create the session - there is no auto-create. Either look up your stored `cus_*` for the logged-in user, or create one inline from the form fields you collected (name/email/phone):
+
 ```js
 // POST /api/checkout
+// 1. Make sure we have a CHING customer id. Persist this in your own DB
+//    keyed by your user id so you reuse it across sessions.
+const { data: customer } = await ching('/customers', {
+  method: 'POST',
+  body: JSON.stringify({
+    name: `${firstName} ${lastName}`,
+    email,
+    phone,                          // optional, E.164 preferred
+  }),
+});
+
+// 2. Create the checkout session against a pre-created price.
 const session = await ching('/checkout_sessions', {
   method: 'POST',
   body: JSON.stringify({
-    mode: 'single_price',
-    price: 'price_AbCdEf',          // pre-created
-    customer: 'cus_XyZ',            // optional; created on the fly if omitted
+    customer: customer.id,          // REQUIRED — cus_*
+    price: 'price_AbCdEf',          // pre-created in CHING
     success_url: 'https://app.example.com/billing/success?cs={CHECKOUT_SESSION_ID}',
     cancel_url: 'https://app.example.com/billing/cancel',
     create_document: true,          // auto-issue a tax invoice
@@ -203,7 +216,26 @@ const session = await ching('/checkout_sessions', {
 return Response.redirect(session.url, 303);
 ```
 
-For a cart use `mode: 'cart'` and provide `line_items: [{ name, description, image_url, amount_agorot, quantity }]`.
+For a cart, drop `price` and pass `line_items` instead. The branch is decided by which key you send — there is **no `mode` field**, and passing both `price` and `line_items` is rejected.
+
+```js
+const session = await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: customer.id,
+    line_items: [
+      { name: 'Nintendo Switch 2', amount_agorot: 149900, quantity: 1,
+        description: 'Console', image_url: 'https://shop.example.com/switch2.png' },
+      { name: 'Xbox Elite Controller', amount_agorot: 59900, quantity: 1 },
+    ],
+    success_url: 'https://shop.example.com/checkout/success?cs={CHECKOUT_SESSION_ID}',
+    cancel_url: 'https://shop.example.com/checkout/cancel',
+    create_document: true,
+  }),
+});
+```
+
+`line_items` accepts `name` (required), `amount_agorot` (required, signed - negatives render as discount lines), `quantity` (default 1, max 1000), `description?`, `image_url?` (must be https://). The cart total across all lines must be >= 0.
 
 Sessions expire **30 minutes** after creation; create a fresh one per checkout attempt. Do not reuse session URLs.
 
