@@ -1,0 +1,464 @@
+---
+name: ching-payments-integration
+description: >-
+  Integrate the CHING payments API into a SaaS or web product to accept
+  Israeli card payments, save cards, run subscriptions, issue refunds,
+  and host a customer billing portal. Use when the user asks to
+  "integrate CHING", "add CHING checkout", "accept payments in Israel",
+  "lekabel tashlumim", "lehosif tashlum", "leshalev CHING", set up
+  webhooks for charge.succeeded, build a Stripe-style billing flow for
+  ILS, or use the @ching-payments/cli to scaffold products and prices.
+  Covers ck_test_/ck_live_ keys, agorot amounts, HMAC webhook
+  verification, and the redirect-only checkout/setup flow at
+  secured.ching.co.il. Do NOT use for non-Israeli payment processors
+  (Stripe, Adyen, PayPal) or for Glance accounting/invoicing flows
+  unrelated to CHING payments.
+license: MIT
+allowed-tools: 'Bash(npx:*) Bash(python3:*) WebFetch'
+compatibility: >-
+  Requires Node.js >=18 for the @ching-payments/cli, an HTTPS endpoint
+  for receiving webhooks, and outbound network access to api.ching.co.il
+  and secured.ching.co.il. Works with Claude Code, Claude.ai, Cursor,
+  and any agent that can run shell commands.
+---
+
+# אינטגרציית תשלומי CHING
+
+CHING היא מערכת תשלומים ישראלית עם API בסגנון Stripe. הסקיל הזה מלווה אותך באינטגרציה מקצה לקצה: יצירת קטלוג מוצרים בעזרת ה-CLI, חיוב חד-פעמי ב-Checkout, שמירת אמצעי תשלום ב-Setup, מנויים, אימות וובהוקים, והפעלת פורטל הלקוחות.
+
+## מודל מנטלי
+
+לקרוא פעם אחת ולחזור לפי הצורך.
+
+| מושג | מה זה | מקבילה ב-Stripe |
+|------|-------|-----------------|
+| Project | חשבון סוחר חי. מחזיק מפתחות וקונפיגורציה | Account |
+| API key | `ck_test_<64hex>` או `ck_live_<64hex>`. נשלח ב-`Authorization: Bearer <key>` | sk_test_/sk_live_ |
+| Product | משהו שמוכרים ("חבילת Pro", "ייעוץ של שעה") | Product |
+| Price | סכום באגורות מקושר למוצר. one_time או recurring | Price |
+| Customer | המשלם הסופי (cus_*) | Customer |
+| Payment Method | כרטיס שמור על לקוח (pm_*) | PaymentMethod |
+| Checkout Session | עמוד מאוחסן לחיוב או עגלה (co_*) | Checkout Session |
+| Setup Session | עמוד מאוחסן ששומר כרטיס בלי לחייב (seti_*) | SetupIntent + Checkout |
+| Subscription | חיוב חוזר על כרטיס שמור (sub_*) | Subscription |
+| Charge | ניסיון תשלום בודד (ch_*) | PaymentIntent + Charge |
+| Refund | החזר חלקי או מלא (re_*) | Refund |
+| Billing Portal | עמוד ניהול עצמי ללקוח | Billing Portal |
+| Webhook | POST חתום ל-endpoint שלכם בעת התרחשות אירוע | Webhook |
+
+שני הכללים החשובים שמונעים את רוב הבאגים:
+
+1. סכומים תמיד באגורות, אף פעם לא בשקלים. ₪49.90 הם 4990. כפל ב-100 בקצה ה-API, חלוקה ב-100 בקצה ה-UI.
+2. Checkout ו-Setup הם redirect בלבד. יוצרים session בצד השרת, מפנים את הלקוח ל-`url` שחוזר, ומקבלים את התוצאה דרך וובהוק. ה-`success_url` הוא ל-UX בלבד; אסור לסמוך על פרמטרים מה-URL הזה לצורך מתן הרשאות.
+
+## הוראות
+
+### שלב 1: הרשמה והגדרת לוח הבקרה של הסוחר
+
+מבקשים מהמשתמש להיכנס ל-https://app.ching.co.il ולבצע:
+
+1. רישום חשבון (אימייל + סיסמה או Google OAuth). מספקים שם עסק, מספר עוסק (מס' ה"פ), וסוג עסק (`COMPANY`, `MURSHE`, `PATOOR`).
+2. נשארים במצב Test (כפתור בסרגל העליון) לפיתוח.
+3. Settings -> API Keys (`/api-keys`), יוצרים מפתח. הערך המלא מוצג פעם אחת בלבד; מעתיקים מיד. פורמט: `ck_test_<64 hex>`.
+4. Settings -> Webhooks (`/webhooks`), מוסיפים endpoint HTTPS של הסוחר ובוחרים סוגי אירועים (או `["*"]`). מעתיקים את הסוד `whsec_<hex>` פעם אחת ומאחסנים כ-`CHING_WEBHOOK_SECRET`.
+
+כדי לעבור ל-Live בהמשך, הסוחר חייב להשלים:
+- הפעלת ספק תשלומים (KYC ב-iframe של Grow תחת `/settings`)
+- קישור זהות עסקית (taxId + שם חברה + סוג)
+- אז לוח הבקרה משחרר יצירה של מפתחות `ck_live_*`
+
+מנחים את המשתמש להציב את המפתח והסוד במשתני סביבה בשרת בלבד, אף פעם לא בקוד צד הלקוח:
+
+```
+CHING_API_KEY=ck_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+CHING_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+CHING_API_BASE=https://api.ching.co.il
+```
+
+### שלב 2: יצירת מוצרים ומחירים עם ה-CLI
+
+ה-CLI הוא הדרך המהירה ביותר לזריעת קטלוג. רצים עם `npx`, בלי התקנה גלובלית.
+
+```bash
+# הזדהות (פותח דפדפן)
+npx @ching-payments/cli login
+
+# או הדבקת API key (CI / לא אינטראקטיבי)
+npx @ching-payments/cli login --with-key
+
+# בדיקה
+npx @ching-payments/cli whoami
+```
+
+ניהול projects מהטרמינל (שימושי במיוחד להקמת project staging נפרד):
+
+```bash
+# הצגת כל ה-projects בחשבון; הפעיל מסומן
+npx @ching-payments/cli projects list
+
+# יצירת project חדש. אם אין project פעיל, החדש מאומץ אוטומטית
+npx @ching-payments/cli projects create --name "Acme Staging"
+
+# מעבר כפוי ל-project שזה עתה נוצר
+npx @ching-payments/cli projects create --name "Acme EU" --switch
+```
+
+פקודות `projects` דורשות אימות browser-token (`ching login` בלי `--with-key`). מפתחות API מקושרים ל-project יחיד, ולכן לא יכולים להציג רשימה או ליצור projects.
+
+יצירת מוצר ומחיר חודשי:
+
+```bash
+# יצירת המוצר
+npx @ching-payments/cli products create \
+  --name "Pro Plan" \
+  --description "All Free features plus advanced reports" \
+  --feature "Unlimited reports|Up to 50 members" \
+  --feature "Priority support"
+
+# מחזיר prod_AbCdEf...
+
+# מחיר מנוי חודשי (₪49.90 לחודש)
+npx @ching-payments/cli prices create \
+  --product prod_AbCdEf \
+  --amount 4990 \
+  --type recurring \
+  --interval month \
+  --tax-mode inclusive
+
+# שנתי עם 14 ימי trial
+npx @ching-payments/cli prices create \
+  --product prod_AbCdEf \
+  --amount 49900 \
+  --type recurring \
+  --interval year \
+  --trial-days 14
+```
+
+לתמחור חד-פעמי משתמשים ב-`--type one_time` בלי `--interval`. ההתייחסות המלאה ב-`references/cli-command-reference.md`.
+
+החלפת מצבים באמצע shell:
+
+```bash
+npx @ching-payments/cli use --test
+npx @ching-payments/cli use proj_xyz --live
+npx @ching-payments/cli prices list --json
+```
+
+כתיבה ב-Live מבקשת אישור. ב-CI מעבירים `--yes`.
+
+ה-CLI לא כולל מאזין וובהוקים (אין מקבילה ל-`stripe listen`). להשתמש ב-ngrok או tunnel דומה לפיתוח מקומי.
+
+### שלב 3: אימות בקשות API מהשרת
+
+כל קריאה הולכת ל-`https://api.ching.co.il/ching/v1/<resource>` עם `Authorization: Bearer <key>` ו-`Content-Type: application/json`. אין SDK עדיין; משתמשים ב-`fetch`/`axios`/`requests`.
+
+עוזר ב-Node.js:
+
+```js
+async function ching(path, init = {}) {
+  const res = await fetch(`https://api.ching.co.il/ching/v1${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${process.env.CHING_API_KEY}`,
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+    },
+  });
+  const body = await res.json();
+  if (!res.ok || body.success === false) {
+    throw new Error(body?.error?.message || `CHING ${res.status}`);
+  }
+  return body;
+}
+```
+
+מבנה שגיאה (תמיד עם `success: false`):
+
+```json
+{
+  "success": false,
+  "error": {
+    "status": 400,
+    "code": "INVALID_FIELD",
+    "message": "amount must be a positive integer",
+    "issues": [{ "path": "amount", "message": "..." }]
+  }
+}
+```
+
+אין עדיין idempotency keys; מבצעים dedupe של כתיבות בצד שלכם, באמצעות אילוץ DB או טבלת hashes של בקשות.
+
+### שלב 4: חיוב חד-פעמי עם Checkout Sessions
+
+בצד השרת, יוצרים session ומפנים את המשתמש ל-`url` שחוזר. העמוד ב-`secured.ching.co.il` מטפל בכרטיסי אשראי, ביט, Apple Pay, Google Pay, PayBox והעברה בנקאית.
+
+```js
+// POST /api/checkout
+const session = await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    mode: 'single_price',
+    price: 'price_AbCdEf',
+    customer: 'cus_XyZ',
+    success_url: 'https://app.example.com/billing/success?cs={CHECKOUT_SESSION_ID}',
+    cancel_url: 'https://app.example.com/billing/cancel',
+    create_document: true,
+  }),
+});
+return Response.redirect(session.url, 303);
+```
+
+לעגלה משתמשים ב-`mode: 'cart'` ומספקים `line_items: [{ name, description, image_url, amount_agorot, quantity }]`.
+
+Sessions פגות תוקף 30 דקות אחרי יצירה. יוצרים אחת חדשה לכל ניסיון checkout. אסור לעשות שימוש חוזר ב-URL של session.
+
+אחרי שהלקוח שילם, CHING שולח `charge.succeeded` לוובהוק שלכם (שלב 7). ההפניה ל-`success_url` היא ל-UX בלבד; אסור לתת הרשאה רק על בסיס ההפניה.
+
+### שלב 5: שמירת כרטיס בלי לחייב (Setup Sessions)
+
+משתמשים ב-Setup Sessions כשצריך כרטיס בתיק לפני חיוב (טריאלים חינם, חיוב פוסט-פייד לפי שימוש, מנויים בלי חיוב מיידי).
+
+```js
+const setup = await ching('/setup_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: 'cus_XyZ',
+    success_url: 'https://app.example.com/onboarding/done',
+    cancel_url: 'https://app.example.com/onboarding/card',
+    metadata: { signupFlow: 'trial-v3' },
+  }),
+});
+return Response.redirect(setup.url, 303);
+```
+
+Setup sessions פגים תוקף אחרי 24 שעות. בהצלחה, אמצעי התשלום החדש (`pm_*`) מצורף ללקוח ונורה `payment_method.attached`.
+
+לרשימת כרטיסים שמורים של לקוח:
+
+```js
+const { data } = await ching(`/customers/cus_XyZ/payment_methods`);
+// [{ id: 'pm_...', brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030 }, ...]
+```
+
+### שלב 6: מנויים (חיוב חוזר)
+
+לאחר שיש ללקוח `pm_*`, אפשר ליצור מנוי מול מחיר recurring.
+
+```js
+const sub = await ching('/subscriptions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: 'cus_XyZ',
+    price: 'price_recurringMonthly',
+    payment_method: 'pm_AbCd',
+  }),
+});
+// sub.status: 'trialing' | 'active' | 'incomplete'
+```
+
+מחזור החיים של הסטטוס:
+- `trialing` (אם למחיר יש `trial_period_days`) -> `active` אחרי החיוב המוצלח הראשון
+- `incomplete` אם החיוב הראשון נכשל; פג אוטומטית ל-`incomplete_expired` אחרי 23 שעות
+- `active` -> `past_due` אם חיוב חוזר נכשל (ניסיונות חוזרים בימים 3, 7, 14) -> `canceled` אחרי הכישלון האחרון
+- `subscription.trial_will_end` נורה 3 ימים לפני סוף ה-trial; להציג CTA "הוסף כרטיס"
+
+ביטול:
+
+```js
+await ching(`/subscriptions/sub_AbCd/cancel`, { method: 'POST' });
+```
+
+### שלב 7: אימות וטיפול בוובהוקים
+
+זה צעד האבטחה הקריטי ביותר. מאמתים כל וובהוק עם HMAC-SHA256 על גוף הבקשה הגולמי.
+
+```js
+import crypto from 'node:crypto';
+
+export function verifyChingSignature(rawBody, header, secret) {
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(rawBody)
+    .digest('hex');
+  const a = Buffer.from(expected, 'hex');
+  const b = Buffer.from(header || '', 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// Express handler. הגוף חייב להיות bytes גולמיים, לא אובייקט מנותח
+app.post('/webhooks/ching',
+  express.raw({ type: 'application/json' }),
+  (req, res) => {
+    const sig = req.header('Ching-Signature');
+    if (!verifyChingSignature(req.body, sig, process.env.CHING_WEBHOOK_SECRET)) {
+      return res.status(400).send('invalid signature');
+    }
+    const event = JSON.parse(req.body.toString('utf8'));
+    handleEvent(event);
+    res.json({ received: true });
+  });
+```
+
+עוזר ב-Python קיים ב-`scripts/verify-webhook.py`.
+
+סוגי אירועים שצריך לטפל בהם ב-SaaS בסיסי:
+
+| אירוע | פעולה |
+|-------|-------|
+| `charge.succeeded` | מתן הרשאה, שליחת קבלה |
+| `charge.failed` | יידוע הלקוח, רישום לאנליטיקת retry |
+| `payment_method.attached` | רענון UI של כרטיסים שמורים |
+| `payment_method.detached` | רענון UI של כרטיסים שמורים |
+| `subscription.created` | הקצאת חבילה |
+| `subscription.updated` | סנכרון סטטוס (`active`, `past_due`, `canceled`) |
+| `subscription.canceled` | ביטול הרשאה בסוף תקופה |
+| `subscription.trial_will_end` | מייל "הוסף כרטיס" |
+| `setup_session.failed` | UI של retry |
+| `setup_session.expired` | UI של retry |
+| `refund.created` | עדכון חשבונאות פנימית |
+
+מבנה payload מלא וקטלוג האירועים המלא ב-`references/webhook-events.md`.
+
+### שלב 8: החזרים
+
+```js
+await ching('/refunds', {
+  method: 'POST',
+  body: JSON.stringify({
+    charge: 'ch_AbCd',
+    amount_agorot: 4990,
+    reason: 'requested_by_customer',
+  }),
+});
+```
+
+ההחזרים אסינכרוניים; הוובהוק `refund.created` נורה כשהבנק מאשר.
+
+### שלב 9: פורטל לקוחות לניהול עצמי
+
+שולחים לקוח מאומת לפורטל מאוחסן שבו הוא מנהל כרטיסים, מנויים ומוריד חשבוניות.
+
+```js
+const portal = await ching('/billing_portal_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: 'cus_XyZ',
+    return_url: 'https://app.example.com/account',
+  }),
+});
+return Response.redirect(portal.url, 303);
+```
+
+טוקני פורטל פגים אחרי כשעה. יוצרים מחדש בכל ביקור, לא לקאש את ה-URL.
+
+### שלב 10: בדיקת האינטגרציה מקצה לקצה
+
+1. עם API key של test, יוצרים customer ו-setup session.
+2. פותחים את ה-URL שחוזר, משתמשים בזרימת sandbox ב-`secured.ching.co.il` כדי לצרף כרטיס.
+3. מוודאים ש-`payment_method.attached` הגיע לוובהוק.
+4. יוצרים מנוי מול מחיר recurring.
+5. מוודאים `subscription.created` ו-`charge.succeeded` המיידי.
+6. מבצעים החזר, מוודאים `refund.created`.
+7. פותחים את ה-Billing Portal, מבטלים את המנוי, מוודאים `subscription.canceled`.
+
+טאנלים לפיתוח: משתמשים ב-`ngrok http 3000` (או `cloudflared tunnel`) ומדביקים את ה-URL הציבורי בקונפיג הוובהוק בדשבורד. אסור להפנות וובהוקי production לטאנל.
+
+## דוגמאות
+
+### דוגמה 1: "להוסיף checkout של CHING לאפליקציית Next.js"
+
+המשתמש אומר: "אני רוצה להוסיף חבילת Pro ב-₪49.90 לחודש דרך CHING checkout באפליקציית Next.js".
+
+פעולות:
+1. מבקשים מהמשתמש ליצור project, API key ו-webhook בדשבורד (שלב 1).
+2. בלי להתקין כלום, משתמשים ב-`npx @ching-payments/cli` כדי ליצור את המוצר ומחיר recurring (שלב 2).
+3. מוסיפים API route ב-`app/api/checkout/route.ts` שקורא ל-`POST /v1/checkout_sessions` ומבצע `Response.redirect` (שלב 4).
+4. מוסיפים `app/api/webhooks/ching/route.ts` עם אימות HMAC כמו ב-`scripts/verify-webhook.py` (שלב 7).
+5. ב-`subscription.created` קובעים את החבילה ב-DB.
+6. ב-`subscription.canceled` קובעים downgrade ל-`current_period_end`.
+
+תוצאה: זרימת מנוי עובדת, הקצאת הרשאות מונעת לחלוטין על ידי וובהוקים.
+
+### דוגמה 2: "שמירת כרטיס בהרשמה, חיוב מאוחר יותר"
+
+המשתמש אומר: "אני רוצה לאסוף כרטיס בהרשמה אבל לחייב לפי שימוש בסוף החודש".
+
+פעולות:
+1. יוצרים customer בזרימת ההרשמה: `POST /v1/customers`.
+2. יוצרים Setup Session מיד אחרי, מפנים ל-`setup.url` (שלב 5).
+3. ב-`payment_method.attached`, מסמנים את הלקוח כ"ניתן לחיוב" ב-DB.
+4. בסוף החודש, מחשבים שימוש באגורות וקוראים ל-`POST /v1/charges` עם `customer`, `payment_method` (ה-`pm_*` השמור), `amount`, `description`.
+5. ב-`charge.succeeded`, מסמנים את החשבונית כשולמה.
+
+תוצאה: חיוב לפי שימוש בלי החזקת מספרי כרטיס.
+
+### דוגמה 3: "החזר ללקוח שביטל תוך 14 יום"
+
+המשתמש אומר: "לקוח רוצה כסף בחזרה. נרשם לפני 5 ימים ב-₪199".
+
+פעולות:
+1. מאתרים את ה-charge ID במערכת שלכם (או `GET /v1/charges?customer=cus_XyZ`).
+2. מוציאים החזר: `POST /v1/refunds` עם `charge: 'ch_...'`, `reason: 'requested_by_customer'`.
+3. מבטלים את המנוי: `POST /v1/subscriptions/sub_.../cancel`.
+4. ב-`refund.created`, שולחים מייל אישור ומעדכנים חשבונאות.
+5. ב-`subscription.canceled`, מבטלים הרשאה.
+
+תוצאה: החזר וביטול נקיים בארבעה אירועי וובהוק.
+
+## משאבים מצורפים
+
+### סקריפטים
+
+- `scripts/verify-webhook.py` - מאמת את ה-Header `Ching-Signature` מול payload גולמי באמצעות HMAC-SHA256. שימושי לבדיקות נקודתיות או כיישום ייחוס. הרצה: `python3 scripts/verify-webhook.py --help`
+- `scripts/agorot-converter.py` - ממיר בין שקלים לאגורות כדי למנוע באג off-by-100. הרצה: `python3 scripts/agorot-converter.py --help`
+
+### מסמכי עזר
+
+- `references/api-endpoints.md` - קטלוג endpoints מלא: כל ראוט REST ציבורי עם method, path, שדות חובה ורשות, ומוסכמות הקידומות של IDs. לעיון בעת בניית קריאת API חדשה או דיבוג של 4xx.
+- `references/webhook-events.md` - כל סוגי האירועים של וובהוקים, מבנה payload, מחזור חיים וסמנטיקת retries. כולל אלגוריתם אימות HMAC המלא. לעיון בעת חיווט או דיבוג של handlers.
+- `references/cli-command-reference.md` - כל פקודות `@ching-payments/cli` עם כל הדגלים ודוגמאות הרצה. לעיון בעת אוטומציה של פעולות קטלוג או בניית deploy automation.
+
+## קישורי עזר
+
+מקורות רשמיים לאימות ועדכון המידע בסקיל:
+
+| מקור | URL | מה לבדוק |
+|------|-----|----------|
+| אתר השיווק של CHING | https://ching.co.il | מיצוב המוצר, חבילות מחיר |
+| לוח הבקרה של הסוחר | https://app.ching.co.il | API keys, webhooks, מוצרים, לקוחות |
+| בסיס ה-API | https://api.ching.co.il | בדיקת תקינות; ה-API הציבורי תחת `/ching/v1` (דורש `Authorization: Bearer ck_...`) |
+| ה-CLI ב-npm | https://www.npmjs.com/package/@ching-payments/cli | גרסה אחרונה של ה-CLI, פקודת התקנה |
+| כללי מע"מ ישראל (gov.il) | https://www.gov.il/he/departments/israel_tax_authority | שיעור מע"מ נוכחי, דרישות חשבונית |
+
+## מלכודות נפוצות
+
+- סכומים בבקשות API באגורות, לא בשקלים. ₪49.90 הם 4990. כפל ב-100 בקצה ה-API, חלוקה ב-100 בקצה ה-UI. בודקים על ידי round-trip של סכום ידוע דרך `scripts/agorot-converter.py`.
+- חתימת הוובהוק היא HMAC-SHA256 על ה-bytes של גוף הבקשה הגולמי, לא על JSON שעבר parse ו-re-serialize. פריימוורקים שעושים auto-parse של JSON (Express, FastAPI, Next.js route handlers) ישברו את האימות בשקט. לוכדים את הגוף הגולמי לפני parsing.
+- Checkout sessions פגים אחרי 30 דקות, setup sessions אחרי 24 שעות, טוקני billing portal אחרי כשעה. תמיד יוצרים session חדש לכל הפניה. אסור לקאש URL.
+- ההפניה ל-`success_url` היא ל-UX בלבד. אירועי וובהוק הם הסיגנל היחיד האמין להצלחת תשלום. אסור לתת הרשאה רק על בסיס עמוד ההצלחה.
+- מפתחות `ck_live_*` חסומים עד שהסוחר משלים KYC ב-Grow ומקשר זהות עסקית. פיתוח מקומי תמיד במצב test.
+- אין עדיין idempotency keys. עוטפים כתיבות במפתח dedupe משלכם (לדוגמה `INSERT ... ON CONFLICT` על hash של בקשה) כדי לשרוד retries.
+- ל-CLI אין פקודת `listen` (בניגוד ל-Stripe CLI). משתמשים ב-`ngrok` או `cloudflared tunnel` לפיתוח וובהוקים מקומי.
+- ניסיונות retry של מנויים רצים בימים 3, 7 ו-14 אחרי renewal שנכשל, ואז ביטול. בונים את מיילי ה-dunning סביב `subscription.updated` עם `status: 'past_due'`.
+
+## פתרון בעיות
+
+### שגיאה: 401 עם קוד `WRONG_CREDENTIALS`
+סיבה: header `Authorization` חסר או שגוי, או שהמפתח הוחלף או נמחק בדשבורד.
+פתרון: בודקים שה-header הוא בדיוק `Authorization: Bearer ck_test_<64hex>`. מאמתים שהמפתח עדיין קיים ב-https://app.ching.co.il/api-keys. מסובבים אם נחשף.
+
+### שגיאה: 403 עם קוד `LIVE_KEY_INACTIVE`
+סיבה: שימוש במפתח `ck_live_*` לפני שהסוחר השלים onboarding ב-Grow וקישור זהות עסקית.
+פתרון: עוברים ל-`ck_test_*` לפיתוח, או מבקשים מהסוחר להשלים onboarding ב-https://app.ching.co.il/settings.
+
+### שגיאה: וובהוק מחזיר "invalid signature"
+סיבה: הגוף עבר parse (ו-re-serialize) לפני HMAC, או נעשה שימוש בסוד שגוי (test לעומת live, או endpoint לא נכון), או middleware נוסף שינה את ה-bytes.
+פתרון: לוכדים את `req.body` כ-`Buffer`/`bytes` לפני parsing של JSON. משתמשים ב-`express.raw({ type: 'application/json' })` או במקבילה ב-FastAPI/Next.js. מאמתים שהסוד תואם ל-endpoint ולמצב.
+
+### שגיאה: לקוח אומר "שילמתי אבל כלום לא קרה"
+סיבה: הקוד נותן הרשאה על בסיס ההפניה ל-`success_url` (שהלקוח עלול לסגור) במקום על בסיס וובהוק `charge.succeeded`.
+פתרון: מעבירים את כל ההפעלה ל-handler של הוובהוק. עמוד ההצלחה אמור רק להציג "תודה, בדקו אימייל".
+
+### שגיאה: מנוי תקוע ב-`incomplete`
+סיבה: החיוב הראשון נכשל; המנוי ממתין לתשלום מוצלח תוך 23 שעות.
+פתרון: או מאפשרים לו לפוג ל-`incomplete_expired` ויוצרים חדש, או מבקשים מהלקוח לעדכן כרטיס דרך ה-Billing Portal (חיוב מוצלח שם מעביר ל-`active`).

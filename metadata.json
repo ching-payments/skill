@@ -1,0 +1,40 @@
+{
+  "author": "CHING",
+  "version": "1.0.0",
+  "category": "tax-and-finance",
+  "tags": {
+    "he": [
+      "תשלומים",
+      "צ'ינג",
+      "סליקה",
+      "מנויים",
+      "חשבוניות",
+      "ישראל"
+    ],
+    "en": [
+      "payments",
+      "ching",
+      "checkout",
+      "subscriptions",
+      "invoicing",
+      "israel"
+    ]
+  },
+  "display_name": {
+    "he": "CHING - סליקת אשראי ומנויים חודשיים",
+    "en": "CHING - Credit Card Payments and Monthly Subscriptions"
+  },
+  "display_description": {
+    "he": "שילוב מערכת התשלומים של CHING במוצר SaaS או אתר: יצירת מוצרים ומחירים, דפי צ׳קאאוט, שמירת אמצעי תשלום, מנויים, החזרים, פורטל לקוחות ואימות וובהוקים. כולל שימוש ב-CLI, מפתחות ck_test_/ck_live_, סכומים באגורות וחתימת HMAC.",
+    "en": "Integrate the CHING payments API into a SaaS or web product to accept Israeli card payments, save cards, run subscriptions, issue refunds, and host a customer billing portal. Covers the @ching-payments/cli, ck_test_/ck_live_ keys, agorot amounts, and HMAC webhook verification."
+  },
+  "supported_agents": [
+    "claude-code",
+    "cursor",
+    "github-copilot",
+    "windsurf",
+    "opencode",
+    "codex",
+    "gemini-cli"
+  ]
+}
