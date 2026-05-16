@@ -48,15 +48,21 @@ There is **no** top-level `GET /payment_methods` listing across the project; que
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/charges` | Create. Required: `customer`, `payment_method`, `amount` (positive integer, agorot). Optional: `currency` (default `ils`), `description`, `installments: { count }` (`count` integer min 1, default 1), `metadata`. |
-| GET | `/charges/:id` | Retrieve a charge. |
+| POST | `/charges` | Create. Required: `customer`, `payment_method`, `amount` (positive integer, agorot). Optional: `currency` (default `ils`), `description`, `installments: { count }` (`count` integer min 1, default 1), `metadata`. Always automatic capture - the saved-card API does not accept `capture_method=manual` (use checkout sessions for that). |
+| GET | `/charges/:id` | Retrieve a charge. Response includes `capture_method`, `authorized_at`, `capturable_until`, `captured_at`, `amount_captured`, `cancellation_reason` for J4J5 manual-capture charges. |
 | GET | `/charges` | List up to 100 most-recent. Optional `?customer=cus_*` filter (other query params are ignored). |
+| POST | `/charges/:id/capture` | Capture a manual-capture charge currently in `requires_capture`. Optional body: `amount` (integer agorot, partial capture - must be ≤ original authorized amount; difference auto-released to customer). Fires `charge.captured`, issues the tax document, emails the receipt. Errors: `charge_not_capturable`, `capture_amount_too_large`, `charge_authorization_expired`, `provider_error`. |
+| POST | `/charges/:id/cancel` | Cancel (void) a manual-capture charge in `requires_capture`. Optional body: `cancellation_reason` (`requested_by_customer` / `fraudulent` / `abandoned`; default `requested_by_customer`). Fires `charge.canceled`. CHING-side release is immediate; customer's bank may take up to 10 days to release the hold. Errors: `charge_not_cancelable`. For captured charges use `POST /refunds` instead. |
+
+Charge statuses: `pending`, `processing`, `succeeded`, `failed`, `canceled`, `requires_capture` (new - manual-capture authorization awaiting capture/cancel).
+
+Charge `capture_method`: `automatic` (default; J4 - charge immediately) or `manual` (J5 - authorize then capture). Manual capture is only enabled via the checkout sessions API; the daily sweep auto-cancels held charges at `capturable_until` (~7 days after authorization).
 
 ## Checkout Sessions (hosted payment page)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/checkout_sessions` | Create. Required: `customer` (`cus_*` — must already exist; no auto-create), `success_url`, `cancel_url`, and **exactly one** of `price` (single one-time or recurring price id) or `line_items` (ad-hoc cart). Optional: `create_document` (default true). sending both is rejected with 400 `invalid_request`. Returns `{ id, url, expires_at }`. TTL 30 minutes. |
+| POST | `/checkout_sessions` | Create. Required: `customer` (`cus_*` - must already exist; no auto-create), `success_url`, `cancel_url`, and **exactly one** of `price` (single one-time or recurring price id) or `line_items` (ad-hoc cart). Optional: `create_document` (default true), `capture_method` (`automatic` default; or `manual` for J4J5 authorize-then-capture - only valid for one-time prices or carts with a new card; rejected for recurring prices). Sending both `price` and `line_items` is rejected with 400 `invalid_request`. Returns `{ id, url, expires_at }`. TTL 30 minutes. |
 | GET | `/checkout_sessions/:id/public` | Public, no auth. Used by the hosted page. |
 | POST | `/checkout_sessions/:id/confirm` | Public. Submitted by the hosted page after the customer pays. |
 

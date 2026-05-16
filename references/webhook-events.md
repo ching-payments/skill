@@ -114,6 +114,9 @@ A standalone CLI verifier is bundled at `scripts/verify-webhook.py`.
 |------|---------------|-----------------|
 | `charge.succeeded` | A charge completed and funds settled (or are reserved on the card). | Charge (`ch_*`) |
 | `charge.failed` | A charge attempt was declined. `data.failure_reason` carries the cause. | Charge |
+| `charge.authorized` | A manual-capture (J5) charge was authorized but not yet captured. Payload carries `capture_method: "manual"`, `authorized_at`, `capturable_until`. The merchant must call `POST /charges/:id/capture` or `/cancel` within ~7 days. | Charge |
+| `charge.captured` | A previously-authorized charge was captured. Payload carries `amount_captured` (may be < `amount` on partial capture - the unused balance was released to the customer). Receipt emails and tax document issuance happen at this point, not at authorization. | Charge |
+| `charge.canceled` | A held authorization was canceled - either by `POST /charges/:id/cancel` or automatically by the daily sweep at `capturable_until`. `data.cancellation_reason` is one of `requested_by_customer`, `fraudulent`, `abandoned`, `expired`. | Charge |
 | `payment_method.attached` | A card was saved on a customer (via Setup Session, test card mint, or Billing Portal). | Payment method (`pm_*`) |
 | `payment_method.detached` | A saved card was removed (by merchant, customer, or expiry). | Payment method |
 | `refund.created` | A refund was issued and the bank confirmed (or final state determined). | Refund (`re_*`) |
@@ -142,6 +145,25 @@ subscription.trial_will_end
 [on trial_end]
 charge.succeeded               (first paid period)
 subscription.updated           (status: active)
+```
+
+### Manual capture (J4J5)
+```
+charge.authorized              (Grow J5 hold, awaiting capture or cancel)
+[merchant calls POST /charges/:id/capture]
+charge.captured                (funds captured; tax document + receipt issued)
+```
+Or:
+```
+charge.authorized
+[merchant calls POST /charges/:id/cancel]
+charge.canceled                (cancellation_reason: requested_by_customer | fraudulent | abandoned)
+```
+Or, if no action by `capturable_until`:
+```
+charge.authorized
+[7 days pass]
+charge.canceled                (cancellation_reason: expired)
 ```
 
 ### Failed renewal and dunning

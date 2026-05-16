@@ -241,6 +241,46 @@ Sessions expire **30 minutes** after creation; create a fresh one per checkout a
 
 After the customer pays, CHING posts `charge.succeeded` to your webhook (Step 7). The redirect to `success_url` is for UX only; never grant entitlements based on the redirect alone.
 
+#### Authorize now, capture later (J4J5 manual capture)
+
+For ecommerce where the final amount isn't known at checkout (variable-weight goods, made-to-order, stock confirmation required), pass `capture_method: 'manual'` on the checkout session. CHING authorizes the card via Grow's J5 hold and waits for an explicit `POST /v1/charges/:id/capture` (within 7 days) - no money moves until you capture. This mirrors Stripe's manual-capture flow.
+
+```js
+const session = await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: customer.id,
+    line_items: [{ name: 'Sea bass (per kg)', amount_agorot: 12000, quantity: 1 }],
+    capture_method: 'manual',     // J5 hold, not immediate charge
+    success_url: '...',
+    cancel_url: '...',
+  }),
+});
+```
+
+After the customer pays, you receive `charge.authorized` (NOT `charge.succeeded`) and have ~7 days. Then either:
+
+```js
+// Stock confirmed - capture (full or partial; unused balance auto-released).
+await ching(`/charges/${chargeId}/capture`, {
+  method: 'POST',
+  body: JSON.stringify({ amount: 13400 }),  // omit for full capture
+});
+// charge.captured fires; receipt emails + tax document issue here.
+
+// Or, order canceled - release the hold.
+await ching(`/charges/${chargeId}/cancel`, {
+  method: 'POST',
+  body: JSON.stringify({ cancellation_reason: 'requested_by_customer' }),
+});
+// charge.canceled fires.
+```
+
+Constraints to remember:
+- Only valid for one-time prices and carts with a new card. Recurring prices are rejected; saved cards and express wallets (Apple Pay / Bit / Google Pay) ignore the flag and stay automatic.
+- Cancellation releases the CHING-side record immediately, but the customer's bank may take up to **10 days** to remove the hold from their available balance (Grow's auto-release window). Tell your customer this.
+- The daily sweep auto-cancels held charges at `capturable_until` (~7 days) with `cancellation_reason: 'expired'`.
+
 ### Step 5: Save a card without charging (Setup Sessions)
 
 Use Setup Sessions when you need a card on file before billing (free trials, post-paid usage, recurring without immediate charge).
@@ -335,6 +375,9 @@ Event types you must handle for a basic SaaS:
 |-------|--------|
 | `charge.succeeded` | Grant entitlement, send receipt |
 | `charge.failed` | Notify customer, log for retry analytics |
+| `charge.authorized` | (J4J5 only) Mark the order as "card authorized, awaiting capture." Do NOT fulfil yet - no funds have moved. |
+| `charge.captured` | (J4J5 only) Funds captured; fulfil the order. Payload has `amount_captured` which may be less than `amount` on partial capture. |
+| `charge.canceled` | (J4J5 only) Authorization released. Free any held stock. `data.cancellation_reason` tells you why (`requested_by_customer` / `fraudulent` / `abandoned` / `expired`). |
 | `payment_method.attached` | Update saved-card UI |
 | `payment_method.detached` | Refresh saved-card UI |
 | `subscription.created` | Provision plan |
@@ -432,6 +475,22 @@ Actions:
 5. On `subscription.canceled`, revoke entitlement.
 
 Result: clean refund + cancel handled in 4 webhook events.
+
+### Example 4: "Ecommerce store with variable-weight goods (J4J5 manual capture)"
+
+User says: "We sell fish by the kilo; the final price depends on what we actually pack. I want to authorize the card at checkout and charge the real amount after we pack the order."
+
+Actions:
+1. Create the checkout session with `capture_method: 'manual'` and `line_items` for the estimated cart (Step 4 - "Authorize now, capture later").
+2. Customer pays on the hosted page; you receive `charge.authorized` (not `charge.succeeded`). Mark the order "card authorized, awaiting fulfilment" in your DB.
+3. Your fulfilment team weighs and packs the goods.
+4. Call `POST /v1/charges/:id/capture` with `amount` set to the real total in agorot (or omit for full capture). The difference is auto-released to the customer's card.
+5. On `charge.captured`, mark the order paid and shipping. Receipt and tax document fire automatically at capture time.
+6. If the order is canceled before capture, call `POST /v1/charges/:id/cancel` with a `cancellation_reason`. The CHING-side hold releases immediately; warn the customer the bank may hold the funds for up to 10 days regardless.
+
+Reminder: capture/cancel windows close 7 days after authorization (CHING auto-cancels with `cancellation_reason: 'expired'`).
+
+Result: authorize-then-capture flow with no money moving until fulfilment is confirmed.
 
 ## Bundled Resources
 

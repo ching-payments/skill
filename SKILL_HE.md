@@ -214,6 +214,46 @@ Sessions פגות תוקף 30 דקות אחרי יצירה. יוצרים אחת 
 
 אחרי שהלקוח שילם, CHING שולח `charge.succeeded` לוובהוק שלכם (שלב 7). ההפניה ל-`success_url` היא ל-UX בלבד; אסור לתת הרשאה רק על בסיס ההפניה.
 
+#### חיוב מאוחר (J4J5 - capture_method=manual)
+
+עבור חנויות מסחר אלקטרוני שבהן הסכום הסופי לא ידוע במעמד התשלום (סחורה לפי משקל, ייצור לפי הזמנה, אישור מלאי ידני) - שולחים `capture_method: 'manual'` ב-checkout session. CHING מאשרת חיוב בכרטיס (J5 hold של Grow) ומחכה לקריאת `POST /v1/charges/:id/capture` תוך 7 ימים - הכסף לא זז עד שתבצעו capture. זהה ל-manual capture של Stripe.
+
+```js
+const session = await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: customer.id,
+    line_items: [{ name: 'דג בס לק"ג', amount_agorot: 12000, quantity: 1 }],
+    capture_method: 'manual',     // J5 hold, לא חיוב מיידי
+    success_url: '...',
+    cancel_url: '...',
+  }),
+});
+```
+
+אחרי שהלקוח שילם, מקבלים `charge.authorized` (לא `charge.succeeded`) ויש כ-7 ימים לפעול. אז:
+
+```js
+// המלאי אושר - מבצעים חיוב (מלא או חלקי; ההפרש משוחרר אוטומטית).
+await ching(`/charges/${chargeId}/capture`, {
+  method: 'POST',
+  body: JSON.stringify({ amount: 13400 }),  // משמיטים לחיוב מלא
+});
+// charge.captured נורה; קבלות + חשבונית מס מופקות כאן.
+
+// או, ההזמנה בוטלה - משחררים את ההזמנה.
+await ching(`/charges/${chargeId}/cancel`, {
+  method: 'POST',
+  body: JSON.stringify({ cancellation_reason: 'requested_by_customer' }),
+});
+// charge.canceled נורה.
+```
+
+מגבלות חשובות:
+- תקף רק למחירים חד-פעמיים ולעגלות עם כרטיס חדש. מחירים recurring נדחים; כרטיסים שמורים וארנקים מהירים (Apple Pay / Bit / Google Pay) מתעלמים מהדגל ונשארים automatic.
+- ביטול משחרר את הרשומה ב-CHING מיידית, אבל הבנק של הלקוח עשוי לקחת עד **10 ימים** להסיר את ההזמנה ממסגרת האשראי הזמינה (חלון השחרור האוטומטי של Grow). הסבירו את זה ללקוח.
+- ה-sweep היומי מבטל הזמנות שלא טופלו ב-`capturable_until` (כ-7 ימים) עם `cancellation_reason: 'expired'`.
+
 ### שלב 5: שמירת כרטיס בלי לחייב (Setup Sessions)
 
 משתמשים ב-Setup Sessions כשצריך כרטיס בתיק לפני חיוב (טריאלים חינם, חיוב פוסט-פייד לפי שימוש, מנויים בלי חיוב מיידי).
@@ -307,6 +347,9 @@ app.post('/webhooks/ching',
 |-------|-------|
 | `charge.succeeded` | מתן הרשאה, שליחת קבלה |
 | `charge.failed` | יידוע הלקוח, רישום לאנליטיקת retry |
+| `charge.authorized` | (J4J5 בלבד) סימון ההזמנה כ"כרטיס אושר, ממתין לחיוב". אין לבצע fulfilment - לא הועבר כסף. |
+| `charge.captured` | (J4J5 בלבד) הכסף חויב; בצעו fulfilment. ב-payload יש `amount_captured` שעשוי להיות פחות מ-`amount` בחיוב חלקי. |
+| `charge.canceled` | (J4J5 בלבד) ההזמנה שוחררה. שחררו מלאי שמור. `data.cancellation_reason` מסביר למה (`requested_by_customer` / `fraudulent` / `abandoned` / `expired`). |
 | `payment_method.attached` | רענון UI של כרטיסים שמורים |
 | `payment_method.detached` | רענון UI של כרטיסים שמורים |
 | `subscription.created` | הקצאת חבילה |
@@ -404,6 +447,22 @@ return Response.redirect(portal.url, 303);
 5. ב-`subscription.canceled`, מבטלים הרשאה.
 
 תוצאה: החזר וביטול נקיים בארבעה אירועי וובהוק.
+
+### דוגמה 4: "חנות מסחר אלקטרוני עם סחורה לפי משקל (J4J5 manual capture)"
+
+המשתמש אומר: "אנחנו מוכרים דגים לפי קילו; המחיר הסופי תלוי במה שנארוז בפועל. אני רוצה לאשר את הכרטיס במעמד התשלום ולחייב את הסכום האמיתי אחרי שנארוז".
+
+פעולות:
+1. יוצרים checkout session עם `capture_method: 'manual'` ו-`line_items` עם הערכת העגלה (שלב 4 - "חיוב מאוחר").
+2. הלקוח משלם בעמוד המתארח; מקבלים `charge.authorized` (לא `charge.succeeded`). מסמנים את ההזמנה כ"כרטיס אושר, ממתין ל-fulfilment" ב-DB.
+3. צוות ה-fulfilment שוקל ואורז את הסחורה.
+4. קוראים ל-`POST /v1/charges/:id/capture` עם `amount` שווה לסכום האמיתי באגורות (או משמיטים לחיוב מלא). ההפרש משוחרר אוטומטית לכרטיס הלקוח.
+5. ב-`charge.captured`, מסמנים את ההזמנה כשולמה ושולחים למשלוח. הקבלה וחשבונית המס מופקות אוטומטית במעמד ה-capture.
+6. אם ההזמנה מבוטלת לפני capture, קוראים ל-`POST /v1/charges/:id/cancel` עם `cancellation_reason`. ההזמנה משוחררת מיידית ב-CHING; מזהירים את הלקוח שהבנק עשוי להמשיך להחזיק את הכסף עד 10 ימים.
+
+תזכורת: חלון capture/cancel נסגר 7 ימים אחרי האישור (CHING מבטלת אוטומטית עם `cancellation_reason: 'expired'`).
+
+תוצאה: זרימת authorize-then-capture בלי שכסף יזוז עד שה-fulfilment מאושר.
 
 ## משאבים מצורפים
 
