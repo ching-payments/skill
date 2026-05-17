@@ -6,13 +6,12 @@ description: >-
   and host a customer billing portal. Use when the user asks to
   "integrate CHING", "add CHING checkout", "accept payments in Israel",
   "lekabel tashlumim", "lehosif tashlum", "leshalev CHING", set up
-  webhooks for charge.succeeded, build a Stripe-style billing flow for
+  webhooks for charge.succeeded, build a hosted billing flow for
   ILS, or use the @ching-payments/cli to scaffold products and prices.
   Covers ck_test_/ck_live_ keys, agorot amounts, HMAC webhook
   verification, and the redirect-only checkout/setup flow at
   secured.ching.co.il. Do NOT use for non-Israeli payment processors
-  (Stripe, Adyen, PayPal) or for Glance accounting/invoicing flows
-  unrelated to CHING payments.
+  or for Glance accounting/invoicing flows unrelated to CHING payments.
 license: MIT
 allowed-tools: 'Bash(npx:*) Bash(python3:*) WebFetch'
 compatibility: >-
@@ -24,27 +23,27 @@ compatibility: >-
 
 # אינטגרציית תשלומי CHING
 
-CHING היא מערכת תשלומים ישראלית עם API בסגנון Stripe. הסקיל הזה מלווה אותך באינטגרציה מקצה לקצה: יצירת קטלוג מוצרים בעזרת ה-CLI, חיוב חד-פעמי ב-Checkout, שמירת אמצעי תשלום ב-Setup, מנויים, אימות וובהוקים, והפעלת פורטל הלקוחות.
+CHING היא מערכת תשלומים ישראלית עם REST API מודרני ועמודי checkout, setup ופורטל לקוחות מאוחסנים. הסקיל הזה מלווה אותך באינטגרציה מקצה לקצה: יצירת קטלוג מוצרים בעזרת ה-CLI, חיוב חד-פעמי ב-Checkout, שמירת אמצעי תשלום ב-Setup, מנויים, אימות וובהוקים, והפעלת פורטל הלקוחות.
 
 ## מודל מנטלי
 
 לקרוא פעם אחת ולחזור לפי הצורך.
 
-| מושג | מה זה | מקבילה ב-Stripe |
-|------|-------|-----------------|
-| Project | חשבון סוחר חי. מחזיק מפתחות וקונפיגורציה | Account |
-| API key | `ck_test_<64hex>` או `ck_live_<64hex>`. נשלח ב-`Authorization: Bearer <key>` | sk_test_/sk_live_ |
-| Product | משהו שמוכרים ("חבילת Pro", "ייעוץ של שעה") | Product |
-| Price | סכום באגורות מקושר למוצר. one_time או recurring | Price |
-| Customer | המשלם הסופי (cus_*) | Customer |
-| Payment Method | כרטיס שמור על לקוח (pm_*) | PaymentMethod |
-| Checkout Session | עמוד מאוחסן לחיוב או עגלה (co_*) | Checkout Session |
-| Setup Session | עמוד מאוחסן ששומר כרטיס בלי לחייב (seti_*) | SetupIntent + Checkout |
-| Subscription | חיוב חוזר על כרטיס שמור (sub_*) | Subscription |
-| Charge | ניסיון תשלום בודד (ch_*) | PaymentIntent + Charge |
-| Refund | החזר חלקי או מלא (re_*) | Refund |
-| Billing Portal | עמוד ניהול עצמי ללקוח | Billing Portal |
-| Webhook | POST חתום ל-endpoint שלכם בעת התרחשות אירוע | Webhook |
+| מושג | מה זה ב-CHING |
+|------|---------------|
+| Project | חשבון סוחר חי. מחזיק מפתחות וקונפיגורציה |
+| API key | `ck_test_<64hex>` או `ck_live_<64hex>`. נשלח ב-`Authorization: Bearer <key>` |
+| Product | משהו שמוכרים ("חבילת Pro", "ייעוץ של שעה") |
+| Price | סכום באגורות מקושר למוצר. one_time או recurring |
+| Customer | המשלם הסופי (cus_*) |
+| Payment Method | כרטיס שמור על לקוח (pm_*) |
+| Checkout Session | עמוד מאוחסן לחיוב או עגלה (co_*) |
+| Setup Session | עמוד מאוחסן ששומר כרטיס בלי לחייב (seti_*) |
+| Subscription | חיוב חוזר על כרטיס שמור (sub_*) |
+| Charge | ניסיון תשלום בודד (ch_*) |
+| Refund | החזר חלקי או מלא (re_*) |
+| Billing Portal | עמוד ניהול עצמי ללקוח |
+| Webhook | POST חתום ל-endpoint שלכם בעת התרחשות אירוע |
 
 שני הכללים החשובים שמונעים את רוב הבאגים:
 
@@ -146,7 +145,7 @@ npx @ching-payments/cli prices list --json
 
 כתיבה ב-Live מבקשת אישור. ב-CI מעבירים `--yes`.
 
-ה-CLI לא כולל מאזין וובהוקים (אין מקבילה ל-`stripe listen`). להשתמש ב-ngrok או tunnel דומה לפיתוח מקומי.
+ה-CLI לא כולל מאזין וובהוקים. להשתמש ב-ngrok או tunnel דומה כדי לחשוף endpoint מקומי בזמן פיתוח.
 
 ### שלב 3: אימות בקשות API מהשרת
 
@@ -216,7 +215,7 @@ Sessions פגות תוקף 30 דקות אחרי יצירה. יוצרים אחת 
 
 #### חיוב מאוחר (J4J5 - capture_method=manual)
 
-עבור חנויות מסחר אלקטרוני שבהן הסכום הסופי לא ידוע במעמד התשלום (סחורה לפי משקל, ייצור לפי הזמנה, אישור מלאי ידני) - שולחים `capture_method: 'manual'` ב-checkout session. CHING מאשרת חיוב בכרטיס (J5 hold של Grow) ומחכה לקריאת `POST /v1/charges/:id/capture` תוך 7 ימים - הכסף לא זז עד שתבצעו capture. זהה ל-manual capture של Stripe.
+עבור חנויות מסחר אלקטרוני שבהן הסכום הסופי לא ידוע במעמד התשלום (סחורה לפי משקל, ייצור לפי הזמנה, אישור מלאי ידני) - שולחים `capture_method: 'manual'` ב-checkout session. CHING מאשרת חיוב בכרטיס (J5 hold של Grow) ומחכה לקריאת `POST /v1/charges/:id/capture` תוך 7 ימים - הכסף לא זז עד שתבצעו capture.
 
 ```js
 const session = await ching('/checkout_sessions', {
@@ -497,7 +496,7 @@ return Response.redirect(portal.url, 303);
 - ההפניה ל-`success_url` היא ל-UX בלבד. אירועי וובהוק הם הסיגנל היחיד האמין להצלחת תשלום. אסור לתת הרשאה רק על בסיס עמוד ההצלחה.
 - מפתחות `ck_live_*` חסומים עד שהסוחר משלים KYC ב-Grow ומקשר זהות עסקית. פיתוח מקומי תמיד במצב test.
 - אין עדיין idempotency keys. עוטפים כתיבות במפתח dedupe משלכם (לדוגמה `INSERT ... ON CONFLICT` על hash של בקשה) כדי לשרוד retries.
-- ל-CLI אין פקודת `listen` (בניגוד ל-Stripe CLI). משתמשים ב-`ngrok` או `cloudflared tunnel` לפיתוח וובהוקים מקומי.
+- ל-CLI אין פקודת `listen` להעברת וובהוקים. משתמשים ב-`ngrok` או `cloudflared tunnel` כדי לחשוף endpoint מקומי בזמן פיתוח.
 - ניסיונות retry של מנויים רצים בימים 3, 7 ו-14 אחרי renewal שנכשל, ואז ביטול. בונים את מיילי ה-dunning סביב `subscription.updated` עם `status: 'past_due'`.
 
 ## פתרון בעיות

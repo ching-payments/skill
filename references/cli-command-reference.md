@@ -293,7 +293,7 @@ Pass `--yes` to skip in CI. Read commands (`list`, `get`) never prompt.
 
 ## What the CLI does NOT do
 
-- No `listen` / webhook forwarding (no Stripe-CLI-style local tunnel). Use `ngrok` or `cloudflared tunnel`.
+- No `listen` / webhook forwarding (no built-in local tunnel for development webhooks). Use `ngrok` or `cloudflared tunnel`.
 - No `trigger` to fabricate test events. Trigger them by calling the API in test mode (e.g., create a charge against a test card).
 - No `init` / scaffold / template drop. Use this skill's body and bundled examples instead.
 

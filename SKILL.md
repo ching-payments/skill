@@ -6,40 +6,39 @@ description: >-
   and host a customer billing portal. Use when the user asks to
   "integrate CHING", "add CHING checkout", "accept payments in Israel",
   "lekabel tashlumim", "lehosif tashlum", "leshalev CHING", set up
-  webhooks for charge.succeeded, build a Stripe-style billing flow for
+  webhooks for charge.succeeded, build a hosted billing flow for
   ILS, or use the @ching-payments/cli to scaffold products and prices.
   Covers ck_test_/ck_live_ keys, agorot amounts, HMAC webhook
   verification, and the redirect-only checkout/setup flow at
   secured.ching.co.il. Do NOT use for non-Israeli payment processors
-  (Stripe, Adyen, PayPal) or for Glance accounting/invoicing flows
-  unrelated to CHING payments.
+  or for Glance accounting/invoicing flows unrelated to CHING payments.
 license: MIT
 allowed-tools: 'Bash(npx:*) Bash(python3:*) WebFetch'
 ---
 
 # CHING Payments Integration
 
-CHING is an Israeli payments platform with a Stripe-style API. This skill walks you through integrating CHING into a SaaS or web product end-to-end: scaffold the catalog with the CLI, take a one-time payment with Checkout, save a card with Setup, run subscriptions, verify webhooks, and ship the billing portal.
+CHING is an Israeli payments platform with a modern REST API and hosted checkout, setup, and billing-portal pages. This skill walks you through integrating CHING into a SaaS or web product end-to-end: scaffold the catalog with the CLI, take a one-time payment with Checkout, save a card with Setup, run subscriptions, verify webhooks, and ship the billing portal.
 
 ## Mental Model
 
 Read this once, then refer back as needed.
 
-| Concept | What it is | Stripe analog |
-|---------|------------|---------------|
-| Project | A live merchant account; holds keys and config | Account |
-| API key | `ck_test_<64hex>` or `ck_live_<64hex>` (sent as `Authorization: Bearer <key>`) | sk_test_/sk_live_ |
-| Product | A thing you sell ("Pro plan", "1 hour consult") | Product |
-| Price | An amount in agorot tied to a product, one_time or recurring | Price |
-| Customer | The end-payer (cus_*) | Customer |
-| Payment Method | A saved card on a customer (pm_*) | PaymentMethod |
-| Checkout Session | Hosted page for a single charge or cart (co_*) | Checkout Session |
-| Setup Session | Hosted page that saves a card without charging (seti_*) | SetupIntent + Checkout |
-| Subscription | Recurring billing using a saved card (sub_*) | Subscription |
-| Charge | A single payment attempt (ch_*) | PaymentIntent + Charge |
-| Refund | A partial or full reversal (re_*) | Refund |
-| Billing Portal | Hosted self-service page for the customer | Billing Portal |
-| Webhook | Signed HTTPS POST to your endpoint when an event happens | Webhook |
+| Concept | What it is in CHING |
+|---------|---------------------|
+| Project | A live merchant account; holds keys and config |
+| API key | `ck_test_<64hex>` or `ck_live_<64hex>` (sent as `Authorization: Bearer <key>`) |
+| Product | A thing you sell ("Pro plan", "1 hour consult") |
+| Price | An amount in agorot tied to a product, one_time or recurring |
+| Customer | The end-payer (cus_*) |
+| Payment Method | A saved card on a customer (pm_*) |
+| Checkout Session | Hosted page for a single charge or cart (co_*) |
+| Setup Session | Hosted page that saves a card without charging (seti_*) |
+| Subscription | Recurring billing using a saved card (sub_*) |
+| Charge | A single payment attempt (ch_*) |
+| Refund | A partial or full reversal (re_*) |
+| Billing Portal | Hosted self-service page for the customer |
+| Webhook | Signed HTTPS POST to your endpoint when an event happens |
 
 **Two golden rules** that prevent most integration bugs:
 
@@ -141,7 +140,7 @@ npx @ching-payments/cli prices list --json  # machine-readable output
 
 Live writes prompt for confirmation; pass `--yes` in CI.
 
-The CLI does **not** include a webhook listener (no `stripe listen` equivalent). Use ngrok or a tunnel during development.
+The CLI does **not** include a webhook listener. Use ngrok or a tunnel during development to expose your local endpoint.
 
 ### Step 3: Authenticate API requests from your server
 
@@ -243,7 +242,7 @@ After the customer pays, CHING posts `charge.succeeded` to your webhook (Step 7)
 
 #### Authorize now, capture later (J4J5 manual capture)
 
-For ecommerce where the final amount isn't known at checkout (variable-weight goods, made-to-order, stock confirmation required), pass `capture_method: 'manual'` on the checkout session. CHING authorizes the card via Grow's J5 hold and waits for an explicit `POST /v1/charges/:id/capture` (within 7 days) - no money moves until you capture. This mirrors Stripe's manual-capture flow.
+For ecommerce where the final amount isn't known at checkout (variable-weight goods, made-to-order, stock confirmation required), pass `capture_method: 'manual'` on the checkout session. CHING authorizes the card via Grow's J5 hold and waits for an explicit `POST /v1/charges/:id/capture` (within 7 days) - no money moves until you capture.
 
 ```js
 const session = await ching('/checkout_sessions', {
@@ -523,7 +522,7 @@ Official sources for verifying and updating the information in this skill:
 - The `success_url` redirect is for UX only. Webhook events are the only trustworthy signal of payment success. Never grant entitlement on the success page alone.
 - `ck_live_*` keys are blocked until the merchant completes Grow KYC and links a business identity. Local development is always test mode.
 - There are no idempotency keys yet. Wrap writes with your own dedupe key (e.g., `INSERT ... ON CONFLICT` on a request hash) to survive retries.
-- The CLI has no `listen` command (unlike Stripe CLI). Use `ngrok` or `cloudflared tunnel` for local webhook development.
+- The CLI has no `listen` command for forwarding webhooks. Use `ngrok` or `cloudflared tunnel` to expose your local endpoint during development.
 - Subscription retries run at days 3, 7, and 14 after a failed renewal, then cancel. Build your dunning emails around `subscription.updated` with `status: 'past_due'`.
 
 ## Troubleshooting
