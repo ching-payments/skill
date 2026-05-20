@@ -56,6 +56,8 @@ Have the user open https://app.ching.co.il and:
 3. Settings to API Keys (`/api-keys`), create a key. The full value is shown **once**, copy it immediately. Format: `ck_test_<64 hex chars>`.
 4. Settings to Webhooks (`/webhooks`), add the merchant's HTTPS endpoint and select event types (or `["*"]`). Copy the `whsec_<hex>` secret **once**, store as `CHING_WEBHOOK_SECRET`.
 
+Steps 3 and 4 can also be done from the terminal with the CLI - `ching api-keys create` and `ching webhooks create` both print the secret once, just like the dashboard. See Step 2.
+
 To go live later, the merchant must complete:
 - Payment provider activation (Grow KYC iframe at `/settings` -> "Join Grow")
 - Linked business identity (taxId + company name + type)
@@ -129,6 +131,23 @@ npx @ching-payments/cli prices create \
 ```
 
 For one-time pricing use `--type one_time` and omit `--interval`. For full reference see `references/cli-command-reference.md`.
+
+Create the API key and webhook from the terminal (alternative to the dashboard in Step 1). Both secrets are printed **once** - capture them immediately:
+
+```bash
+# Issue an API key (uses the active mode -> ck_test_ in test, ck_live_ in live).
+# Requires browser login (ching login); --with-key sessions can't create keys.
+npx @ching-payments/cli api-keys create --name "Acme server key"
+
+# Register a webhook in the current mode. Prints the whsec_ signing secret once.
+npx @ching-payments/cli webhooks create \
+  --url https://acme.com/webhooks/ching \
+  --events charge.succeeded charge.failed
+
+# Inspect later (secrets are never re-shown - only masked previews):
+npx @ching-payments/cli api-keys list
+npx @ching-payments/cli webhooks list
+```
 
 Mode-switching mid-shell:
 

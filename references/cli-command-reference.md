@@ -122,9 +122,9 @@ After create, the new project starts in test mode and has no API keys, webhooks,
 # Create your first product in the new project
 npx @ching-payments/cli products create --name "Pro Plan"
 
-# Open the dashboard to mint an API key and configure webhooks
-npx @ching-payments/cli open api-keys
-npx @ching-payments/cli open webhooks
+# Mint an API key and register a webhook (or use `open` to do it in the dashboard)
+npx @ching-payments/cli api-keys create --name "Server key"
+npx @ching-payments/cli webhooks create --url https://example.com/webhooks/ching --events charge.succeeded
 ```
 
 ### Note: API-key sessions cannot list or create projects
@@ -280,6 +280,94 @@ npx @ching-payments/cli customers create \
 | `--email <email>` | Yes | Customer email. |
 | `--name <name>` | No | Display name. |
 | `--phone <phone>` | No | E.164 phone. |
+
+## Webhooks
+
+Webhook endpoints are **mode-scoped**: a webhook created in test mode only receives test events, and `webhooks list` shows only the active mode's endpoints. Use `--live` / `--test` to target the other mode.
+
+### `webhooks create`
+
+```bash
+# Variadic events
+npx @ching-payments/cli webhooks create \
+  --url https://example.com/webhooks/ching \
+  --events charge.succeeded charge.failed
+
+# Comma-separated events (equivalent)
+npx @ching-payments/cli webhooks create \
+  --url https://example.com/webhooks/ching \
+  --events 'charge.succeeded,charge.failed'
+```
+
+| Flag | Required | Effect |
+|------|----------|--------|
+| `--url <url>` | Yes (non-interactive) | Endpoint URL. Must be `http(s)://`. |
+| `--events <event...>` | Yes (non-interactive) | One or more event types. Repeatable or comma-separated; deduped. See `references/webhook-events.md` for the catalog. |
+
+In a TTY, missing fields are prompted. The response prints the `whsec_<hex>` **signing secret exactly once** - it cannot be retrieved again. If lost, delete the endpoint and recreate it. Store the secret as `CHING_WEBHOOK_SECRET`.
+
+### `webhooks list`
+
+```bash
+npx @ching-payments/cli webhooks list
+npx @ching-payments/cli webhooks list --live --json
+```
+
+Columns: ID (numeric), URL, Events, Active, Created. Secrets are never shown.
+
+### `webhooks delete <id>`
+
+```bash
+npx @ching-payments/cli webhooks delete 42
+```
+
+Takes the numeric id from `webhooks list`. CHING stops delivering events immediately.
+
+## API keys
+
+The active mode decides the kind of key minted: test mode -> `ck_test_*`, live mode -> `ck_live_*`. Live keys require a linked business identity and an active payment provider, otherwise the API returns `LIVE_KEY_PRECONDITIONS_NOT_MET`.
+
+### `api-keys create`
+
+```bash
+npx @ching-payments/cli api-keys create --name "Acme server key"
+npx @ching-payments/cli api-keys create --name "Acme live key" --live
+```
+
+| Flag | Required | Effect |
+|------|----------|--------|
+| `--name <name>` | No | Label for the key. Prompted in a TTY; defaults to "Test key"/"Live key". |
+
+Prints the full key (`ck_test_`/`ck_live_<64 hex>`) **exactly once** - copy it immediately; only a masked preview is available afterwards.
+
+**Requires a browser-token session** (`ching login` without `--with-key`): the key is tied to your user, so API-key auth has no user to attach and the command refuses with a message to run `ching login`. Listing, renaming, and deleting work with either sign-in method.
+
+### `api-keys list`
+
+```bash
+npx @ching-payments/cli api-keys list
+npx @ching-payments/cli api-keys list --json
+```
+
+Lists **both** test and live keys (this command is not mode-scoped). Columns: ID (numeric), Name, Key (masked preview), Mode, Active, Last used. Only the preview is shown - never the raw key.
+
+### `api-keys rename <id>`
+
+```bash
+npx @ching-payments/cli api-keys rename 7 --name "Renamed key"
+```
+
+| Flag | Required | Effect |
+|------|----------|--------|
+| `--name <name>` | Yes (non-interactive) | New label. Prompted in a TTY. |
+
+### `api-keys delete <id>`
+
+```bash
+npx @ching-payments/cli api-keys delete 7
+```
+
+Takes the numeric id from `api-keys list`. Any service still using the key starts failing immediately.
 
 ## Live-mode safety
 

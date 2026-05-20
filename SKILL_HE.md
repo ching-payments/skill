@@ -61,6 +61,8 @@ CHING היא מערכת תשלומים ישראלית עם REST API מודרני
 3. Settings -> API Keys (`/api-keys`), יוצרים מפתח. הערך המלא מוצג פעם אחת בלבד; מעתיקים מיד. פורמט: `ck_test_<64 hex>`.
 4. Settings -> Webhooks (`/webhooks`), מוסיפים endpoint HTTPS של הסוחר ובוחרים סוגי אירועים (או `["*"]`). מעתיקים את הסוד `whsec_<hex>` פעם אחת ומאחסנים כ-`CHING_WEBHOOK_SECRET`.
 
+שלבים 3 ו-4 אפשר לבצע גם מהטרמינל עם ה-CLI - `ching api-keys create` ו-`ching webhooks create` שניהם מדפיסים את הסוד פעם אחת בלבד, בדיוק כמו לוח הבקרה. ראו שלב 2.
+
 כדי לעבור ל-Live בהמשך, הסוחר חייב להשלים:
 - הפעלת ספק תשלומים (KYC ב-iframe של Grow תחת `/settings`)
 - קישור זהות עסקית (taxId + שם חברה + סוג)
@@ -134,6 +136,23 @@ npx @ching-payments/cli prices create \
 ```
 
 לתמחור חד-פעמי משתמשים ב-`--type one_time` בלי `--interval`. ההתייחסות המלאה ב-`references/cli-command-reference.md`.
+
+יצירת מפתח API ו-webhook מהטרמינל (חלופה ללוח הבקרה בשלב 1). שני הסודות מודפסים פעם אחת בלבד - מעתיקים מיד:
+
+```bash
+# הנפקת מפתח API (לפי המצב הפעיל -> ck_test_ ב-test, ck_live_ ב-live).
+# דורש התחברות בדפדפן (ching login); session של --with-key לא יכול ליצור מפתחות.
+npx @ching-payments/cli api-keys create --name "Acme server key"
+
+# רישום webhook במצב הנוכחי. מדפיס את סוד החתימה whsec_ פעם אחת.
+npx @ching-payments/cli webhooks create \
+  --url https://acme.com/webhooks/ching \
+  --events charge.succeeded charge.failed
+
+# עיון מאוחר יותר (סודות לעולם לא מוצגים שוב - רק תצוגה ממוסכת):
+npx @ching-payments/cli api-keys list
+npx @ching-payments/cli webhooks list
+```
 
 החלפת מצבים באמצע shell:
 
