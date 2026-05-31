@@ -40,10 +40,11 @@ Read this once, then refer back as needed.
 | Billing Portal | Hosted self-service page for the customer |
 | Webhook | Signed HTTPS POST to your endpoint when an event happens |
 
-**Two golden rules** that prevent most integration bugs:
+**Three golden rules** that prevent most integration bugs:
 
 1. **Amounts are always in agorot, never in shekels.** ₪49.90 is `4990`. Multiplying by 100 at the API boundary, dividing by 100 at the UI boundary.
 2. **Checkout and Setup are redirect-only.** You create a session server-side, redirect the customer to the returned `url`, and find out the result via webhook. The `success_url` is for UX only, never trust query params from it for fulfillment.
+3. **Create the customer once, then persist its `cus_*` id on your own user record and reuse it for every action on that person's behalf** - checkout sessions, setup sessions, subscriptions, charges, and billing-portal sessions. The `cus_*` id is the durable handle that ties everything together: saved cards, subscriptions (and therefore the user's current plan), charge history, and tax documents all hang off it. Reuse it and the user's plan and their self-service billing-portal pages persist across sessions; create a fresh customer each time and you fragment that person into disconnected records - duplicate customers, a card saved on one but billed on another, a "missing" subscription, and a portal that shows nothing. One person in your system = one CHING customer, forever.
 
 ## Instructions
 
