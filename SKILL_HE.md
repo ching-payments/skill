@@ -260,6 +260,13 @@ const { data: customer, action } = await ching('/customers/upsert', {
 
 עדכון והתאמת upsert משדרים `customer.updated`; upsert שיוצר לקוח חדש משדר `customer.created`.
 
+כדי למחוק לקוח, שולחים `DELETE /customers/:id`. זו **מחיקה רכה** (soft delete): הרשומה מסומנת כמחוקה אך לא נמחקת - כל החיובים, המסמכים והמנויים ממשיכים להצביע עליה כך שההיסטוריה הפיננסית נשמרת, וכרטיסים שמורים מנותקים. אם ללקוח יש מנוי במצב `active`, `trialing` או `past_due`, הקריאה מחזירה `409` (`CUSTOMER_HAS_ACTIVE_SUBSCRIPTION`); מבטלים קודם את המנוי ואז מוחקים. אחרי המחיקה הלקוח לא מופיע ב-`list`, לא מותאם ב-`upsert`, לא ניתן לעדכון, ו-`GET` מחזיר `{ id, object: "customer", deleted: true }`. משדר `customer.deleted`. הקריאה אידמפוטנטית.
+
+```js
+await ching(`/customers/${customerId}`, { method: 'DELETE' });
+// -> { success: true, data: { id, object: 'customer', deleted: true } }
+```
+
 #### חיוב מאוחר (J4J5 - capture_method=manual)
 
 עבור חנויות מסחר אלקטרוני שבהן הסכום הסופי לא ידוע במעמד התשלום (סחורה לפי משקל, ייצור לפי הזמנה, אישור מלאי ידני) - שולחים `capture_method: 'manual'` ב-checkout session. CHING מאשרת חיוב בכרטיס (J5 hold של Grow) ומחכה לקריאת `POST /v1/charges/:id/capture` תוך 7 ימים - הכסף לא זז עד שתבצעו capture.

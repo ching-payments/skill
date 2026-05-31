@@ -262,6 +262,13 @@ const { data: customer, action } = await ching('/customers/upsert', {
 
 Updates and upsert-matches emit `customer.updated`; an upsert that creates emits `customer.created`.
 
+To remove a customer, `DELETE /customers/:id`. This is a **soft delete**: the record is tombstoned, not erased - all charges, documents, and subscriptions keep referencing it so your financial history stays intact, and saved cards are detached. If the customer has a subscription in `active`, `trialing`, or `past_due`, the call returns `409` (`CUSTOMER_HAS_ACTIVE_SUBSCRIPTION`); cancel the subscription first, then delete. After deletion the customer drops out of `list`, is skipped by `upsert` matching, can no longer be updated, and `GET` returns `{ id, object: "customer", deleted: true }`. Emits `customer.deleted`. The call is idempotent.
+
+```js
+await ching(`/customers/${customerId}`, { method: 'DELETE' });
+// -> { success: true, data: { id, object: 'customer', deleted: true } }
+```
+
 For a cart, drop `price` and pass `line_items` instead. The branch is decided by which key you send — there is **no `mode` field**, and passing both `price` and `line_items` is rejected.
 
 ```js
