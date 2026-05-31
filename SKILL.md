@@ -205,7 +205,7 @@ There are no idempotency keys yet; deduplicate writes on your side using a datab
 
 Server-side, create a session and redirect the user to the returned `url`. The `secured.ching.co.il` page handles cards, Bit, Apple Pay, Google Pay, PayBox, and bank transfer.
 
-A `customer` (`cus_*`) must exist before you create the session - there is no auto-create. Either look up your stored `cus_*` for the logged-in user, or create one inline from the form fields you collected (name/email/phone):
+A `customer` (`cus_*`) must exist before you create the session - there is no auto-create. Either look up your stored `cus_*` for the logged-in user, or create one inline from the form fields you collected (name/email/phone). If you sync customers from your own system and would rather not track whether each one already exists in CHING, use **upsert** instead of create (see below):
 
 ```js
 // POST /api/checkout
@@ -233,6 +233,34 @@ const session = await ching('/checkout_sessions', {
 });
 return Response.redirect(session.url, 303);
 ```
+
+#### Updating and upserting customers
+
+To change an existing customer, `POST /customers/:id` with only the fields you want to change (patch semantics; omitted fields are untouched). Returns `404` if the id does not exist.
+
+```js
+await ching(`/customers/${customerId}`, {
+  method: 'POST',
+  body: JSON.stringify({ email: 'new@example.com', taxId: '514999874' }),
+});
+```
+
+To create-or-update in one call, `POST /customers/upsert` with an `identifyBy` of `email`, `taxId`, or `phone`. CHING looks up an existing customer in the current mode by that field; if found it patches it, otherwise it creates a new one. The response carries `action: "created" | "updated"`. `name` is required only when a new customer is created. Phone values are normalized to E.164 before matching, so `054-987-6543` matches a stored `+972549876543`. If more than one customer matches, the most recently created one is updated.
+
+```js
+const { data: customer, action } = await ching('/customers/upsert', {
+  method: 'POST',
+  body: JSON.stringify({
+    identifyBy: 'email',           // 'email' | 'taxId' | 'phone'
+    email,                          // the match key - must be present
+    name: `${firstName} ${lastName}`,
+    phone,
+  }),
+});
+// action === 'created' or 'updated'; customer.id is the cus_* either way
+```
+
+Updates and upsert-matches emit `customer.updated`; an upsert that creates emits `customer.created`.
 
 For a cart, drop `price` and pass `line_items` instead. The branch is decided by which key you send — there is **no `mode` field**, and passing both `price` and `line_items` is rejected.
 

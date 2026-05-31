@@ -232,6 +232,34 @@ Sessions פגות תוקף 30 דקות אחרי יצירה. יוצרים אחת 
 
 אחרי שהלקוח שילם, CHING שולח `charge.succeeded` לוובהוק שלכם (שלב 7). ההפניה ל-`success_url` היא ל-UX בלבד; אסור לתת הרשאה רק על בסיס ההפניה.
 
+#### עדכון ו-upsert של לקוחות
+
+כדי לעדכן לקוח קיים, שולחים `POST /customers/:id` עם השדות שרוצים לשנות בלבד (patch - שדות שלא נשלחו נשארים כמו שהם). מחזיר `404` אם ה-id לא קיים.
+
+```js
+await ching(`/customers/${customerId}`, {
+  method: 'POST',
+  body: JSON.stringify({ email: 'new@example.com', taxId: '514999874' }),
+});
+```
+
+כדי ליצור-או-לעדכן בקריאה אחת, שולחים `POST /customers/upsert` עם `identifyBy` של `email`, `taxId` או `phone`. CHING מחפשת לקוח קיים במצב הנוכחי לפי השדה הזה; אם נמצא - מעדכנת אותו (patch), אחרת יוצרת לקוח חדש. התגובה כוללת `action: "created" | "updated"`. `name` נדרש רק כשנוצר לקוח חדש. מספרי טלפון מנורמלים ל-E.164 לפני ההשוואה, כך ש-`054-987-6543` מתאים ל-`+972549876543` שמור. אם יותר מלקוח אחד מתאים, מעודכן הלקוח שנוצר אחרון.
+
+```js
+const { data: customer, action } = await ching('/customers/upsert', {
+  method: 'POST',
+  body: JSON.stringify({
+    identifyBy: 'email',           // 'email' | 'taxId' | 'phone'
+    email,                          // מפתח ההתאמה - חייב להיות נוכח
+    name: `${firstName} ${lastName}`,
+    phone,
+  }),
+});
+// action הוא 'created' או 'updated'; customer.id הוא ה-cus_* בכל מקרה
+```
+
+עדכון והתאמת upsert משדרים `customer.updated`; upsert שיוצר לקוח חדש משדר `customer.created`.
+
 #### חיוב מאוחר (J4J5 - capture_method=manual)
 
 עבור חנויות מסחר אלקטרוני שבהן הסכום הסופי לא ידוע במעמד התשלום (סחורה לפי משקל, ייצור לפי הזמנה, אישור מלאי ידני) - שולחים `capture_method: 'manual'` ב-checkout session. CHING מאשרת חיוב בכרטיס (J5 hold של Grow) ומחכה לקריאת `POST /v1/charges/:id/capture` תוך 7 ימים - הכסף לא זז עד שתבצעו capture.
