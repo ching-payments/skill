@@ -62,11 +62,11 @@ Charge `capture_method`: `automatic` (default; J4 - charge immediately) or `manu
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/checkout_sessions` | Create. Required: `customer` (`cus_*` - must already exist; no auto-create), `success_url`, `cancel_url`, and **exactly one** of `price` (single one-time or recurring price id) or `line_items` (ad-hoc cart). Optional: `create_document` (default true), `capture_method` (`automatic` default; or `manual` for J4J5 authorize-then-capture - only valid for one-time prices or carts with a new card; rejected for recurring prices). Sending both `price` and `line_items` is rejected with 400 `invalid_request`. Returns `{ id, url, expires_at }`. TTL 30 minutes. |
+| POST | `/checkout_sessions` | Create. Required: `customer` (`cus_*` - must already exist; no auto-create), `success_url`, `cancel_url`, and a mode selector: `price` alone (single one-time or recurring price id), `line_items` alone (ad-hoc cart), or **both `price` and `line_items`** (mixed: recurring plan + one-time items; the `price` must be recurring or it is rejected with `mixed_requires_recurring_price`). There is no `mode` field; the keys you send pick the mode. Optional: `create_document` (default true), `capture_method` (`automatic` default; or `manual` for J4J5 authorize-then-capture - only valid for one-time prices or carts with a new card; rejected for recurring prices and for mixed). Returns `{ id, url, expires_at }`. TTL 30 minutes. |
 | GET | `/checkout_sessions/:id/public` | Public, no auth. Used by the hosted page. |
 | POST | `/checkout_sessions/:id/confirm` | Public. Submitted by the hosted page after the customer pays. |
 
-`line_items` shape (when using the cart branch):
+`line_items` shape (same for the cart branch and the mixed branch):
 
 ```json
 [

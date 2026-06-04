@@ -227,7 +227,7 @@ const session = await ching('/checkout_sessions', {
 return Response.redirect(session.url, 303);
 ```
 
-לעגלה משתמשים ב-`mode: 'cart'` ומספקים `line_items: [{ name, description, image_url, amount_agorot, quantity }]`.
+לעגלה שולחים `line_items: [{ name, description, image_url, amount_agorot, quantity }]` במקום `price`. אם שולחים גם `price` (מחזורי) וגם `line_items` יחד, זה **mixed checkout** - מנוי בתוספת פריטים חד-פעמיים באותה session (ראו למטה).
 
 Sessions פגות תוקף 30 דקות אחרי יצירה. יוצרים אחת חדשה לכל ניסיון checkout. אסור לעשות שימוש חוזר ב-URL של session.
 
@@ -267,6 +267,40 @@ const { data: customer, action } = await ching('/customers/upsert', {
 await ching(`/customers/${customerId}`, { method: 'DELETE' });
 // -> { success: true, data: { id, object: 'customer', deleted: true } }
 ```
+
+#### Mixed checkout (מנוי מחזורי + פריטים חד-פעמיים)
+
+שולחים גם `price` וגם `line_items` כדי לחייב מנוי וגם פריטים חד-פעמיים באותה session - למשל תוכנית חודשית בתוספת דמי הקמה חד-פעמיים. אין שדה `mode`; שליחת שני המפתחות יחד בוחרת בענף הזה.
+
+```js
+const session = await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: customer.id,
+    price: 'price_recurringMonthly',  // חייב להיות מחיר מחזורי
+    line_items: [
+      { name: 'דמי הקמה', amount_agorot: 4900, quantity: 1 },
+      { name: 'פגישת onboarding', amount_agorot: 12000, quantity: 1 },
+    ],
+    success_url: 'https://app.example.com/billing/success?cs={CHECKOUT_SESSION_ID}',
+    cancel_url: 'https://app.example.com/billing/cancel',
+    create_document: true,
+  }),
+});
+return Response.redirect(session.url, 303);
+```
+
+כללים והתנהגות:
+
+- **ה-`price` חייב להיות מחזורי.** מחיר חד-פעמי יחד עם `line_items` נדחה עם `mixed_requires_recurring_price` (זו פשוט עגלה, השתמשו ב-`line_items` לבד).
+- **`line_items` באותו מבנה כמו עגלה**: 1 עד 50 פריטים, `amount_agorot` חתום (שלילי = שורת הנחה), והסכום הכולל חייב להיות `>= 0` (אחרת `cart_total_invalid`).
+- **`capture_method: 'manual'` נדחה** (`capture_method_not_supported_for_mixed`). mixed תמיד עובר דרך מסלול הכרטיס השמור כי חייבים לשמור כרטיס לחידושים; J5 hold לא יכול לאשר טוקן מחזורי. ארנקים מהירים מושבתים ב-sessions מסוג mixed מאותה סיבה.
+- **תזמון החיוב תלוי ב-trial:**
+  - בלי trial -> הלקוח מחויב `line_items_total + plan_first_period` מיד והמנוי מתחיל ב-`active`.
+  - עם trial -> רק `line_items_total` מחויב עכשיו, המנוי מתחיל ב-`trialing`, והתקופה הראשונה של התוכנית מחויבת בסיום ה-trial (דרך cron החידוש הרגיל).
+- ה-session הציבורי (`GET /checkout_sessions/:id/public`, בשימוש העמוד המתארח) חושף `billing_summary` ל-sessions מסוג mixed: `amount_due_now`, `one_time_amount_due_now`, `subscription_amount_due_now` (0 בזמן trial), `subscription_amount_due_later`, `trial_period_days`, `trial_end`.
+
+אחרי שהלקוח שילם מתקבל `subscription.created` ואחריו `charge.succeeded` (או `charge.failed` אם החיוב המיידי נדחה, ואז המנוי נשאר `incomplete` וה-session נשאר פתוח לניסיון חוזר). מממשים הרשאה על בסיס הוובהוקים, לא ההפניה. ראו שלב 6 למחזור חיי המנוי ושלב 7 לאירועים.
 
 #### חיוב מאוחר (J4J5 - capture_method=manual)
 
@@ -517,6 +551,19 @@ return Response.redirect(portal.url, 303);
 תזכורת: חלון capture/cancel נסגר 7 ימים אחרי האישור (CHING מבטלת אוטומטית עם `cancellation_reason: 'expired'`).
 
 תוצאה: זרימת authorize-then-capture בלי שכסף יזוז עד שה-fulfilment מאושר.
+
+### דוגמה 5: "חיוב דמי הקמה יחד עם מנוי חדש (mixed checkout)"
+
+המשתמש אומר: "כשמישהו נרשם לתוכנית של ₪99 לחודש אני רוצה לחייב גם דמי הקמה חד-פעמיים של ₪49 באותו checkout."
+
+פעולות:
+1. מוודאים שהלקוח קיים (`POST /customers`) ושהמחיר המחזורי נוצר (`price_*`, ₪99 לחודש).
+2. יוצרים checkout session אחת ששולחת **גם** `price` (התוכנית המחזורית) **וגם** `line_items` (דמי ההקמה של ₪49) - זה mixed checkout (שלב 4 - "Mixed checkout"). מפנים ל-`session.url`.
+3. הלקוח משלם בעמוד המתארח. בלי trial, CHING מחייבת ₪148 עכשיו (תקופת התוכנית הראשונה + דמי ההקמה) ומתקבל `subscription.created` (סטטוס `active`) ואז `charge.succeeded`.
+4. ב-`subscription.created` מפעילים את התוכנית. דמי ההקמה לא דורשים טיפול נפרד - הם נכללו באותו חיוב ומסמך המס שלהם מונפק אוטומטית.
+5. אם למחיר יש trial, רק דמי ההקמה (₪49) מחויבים עכשיו (סטטוס `trialing`); ה-₪99 הראשון של התוכנית מחויב בסיום ה-trial.
+
+תוצאה: תוכנית + תשלום חד-פעמי נגבים בהפניה אחת, מימוש על בסיס הוובהוקים של המנוי והחיוב.
 
 ## משאבים מצורפים
 

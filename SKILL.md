@@ -270,7 +270,11 @@ await ching(`/customers/${customerId}`, { method: 'DELETE' });
 // -> { success: true, data: { id, object: 'customer', deleted: true } }
 ```
 
-For a cart, drop `price` and pass `line_items` instead. The branch is decided by which key you send — there is **no `mode` field**, and passing both `price` and `line_items` is rejected.
+For a cart, drop `price` and pass `line_items` instead. The mode is decided by which keys you send, there is **no `mode` field**:
+
+- `price` alone -> a single charge or a subscription against a pre-created price
+- `line_items` alone -> an ad-hoc cart
+- `price` **and** `line_items` together -> **mixed checkout** (a recurring plan plus one-time line items in one session, see below)
 
 ```js
 const session = await ching('/checkout_sessions', {
@@ -294,6 +298,40 @@ const session = await ching('/checkout_sessions', {
 Sessions expire **30 minutes** after creation; create a fresh one per checkout attempt. Do not reuse session URLs.
 
 After the customer pays, CHING posts `charge.succeeded` to your webhook (Step 7). The redirect to `success_url` is for UX only; never grant entitlements based on the redirect alone.
+
+#### Mixed checkout (recurring plan + one-time line items)
+
+Send **both** `price` and `line_items` to bill a subscription and ad-hoc one-time items in a single session - e.g. a monthly plan plus a one-time setup fee or onboarding session. There is no `mode` field; sending both keys selects this branch.
+
+```js
+const session = await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: customer.id,
+    price: 'price_recurringMonthly',  // MUST be a recurring price
+    line_items: [
+      { name: 'Setup fee', amount_agorot: 4900, quantity: 1 },
+      { name: 'Onboarding session', amount_agorot: 12000, quantity: 1 },
+    ],
+    success_url: 'https://app.example.com/billing/success?cs={CHECKOUT_SESSION_ID}',
+    cancel_url: 'https://app.example.com/billing/cancel',
+    create_document: true,
+  }),
+});
+return Response.redirect(session.url, 303);
+```
+
+Rules and behaviour:
+
+- **The `price` must be recurring.** A one-time price plus `line_items` is rejected with `mixed_requires_recurring_price` (that combination is just a cart, use `line_items` alone).
+- **`line_items` is the same shape as a cart**: 1 to 50 items, `amount_agorot` is signed (negatives are discount lines), and the total across all lines must be `>= 0` (`cart_total_invalid` otherwise).
+- **`capture_method: 'manual'` is rejected** (`capture_method_not_supported_for_mixed`). Mixed always settles through the saved-card flow because it must store a card for renewals; a J5 hold can't authorize a recurring token. Express wallets are disabled on mixed sessions for the same reason.
+- **Billing timing depends on the trial:**
+  - No trial -> the customer is charged `line_items_total + plan_first_period` immediately and the subscription starts `active`.
+  - Trial -> only `line_items_total` is charged now, the subscription starts `trialing`, and the plan's first period is charged when the trial ends (via the normal renewal cron).
+- The public session (`GET /checkout_sessions/:id/public`, used by the hosted page) exposes a `billing_summary` for mixed sessions: `amount_due_now`, `one_time_amount_due_now`, `subscription_amount_due_now` (0 during a trial), `subscription_amount_due_later`, `trial_period_days`, `trial_end`.
+
+After the customer pays you receive `subscription.created` followed by `charge.succeeded` (or `charge.failed` if the immediate charge declines, in which case the subscription is left `incomplete` and the session stays open for retry). Fulfil on the webhooks, never on the redirect. See Step 6 for the subscription lifecycle and Step 7 for the events.
 
 #### Authorize now, capture later (J4J5 manual capture)
 
@@ -545,6 +583,19 @@ Actions:
 Reminder: capture/cancel windows close 7 days after authorization (CHING auto-cancels with `cancellation_reason: 'expired'`).
 
 Result: authorize-then-capture flow with no money moving until fulfilment is confirmed.
+
+### Example 5: "Charge a setup fee alongside a new subscription (mixed checkout)"
+
+User says: "When someone signs up for our ₪99/mo plan I also want to bill a one-time ₪49 setup fee in the same checkout."
+
+Actions:
+1. Make sure the customer exists (`POST /customers`) and the recurring price is created (`price_*`, ₪99/mo).
+2. Create one checkout session passing **both** `price` (the recurring plan) and `line_items` (the ₪49 setup fee) - this is mixed checkout (Step 4 - "Mixed checkout"). Redirect to `session.url`.
+3. Customer pays on the hosted page. With no trial, CHING charges ₪148 now (plan first period + setup fee) and you receive `subscription.created` (status `active`) then `charge.succeeded`.
+4. On `subscription.created`, provision the plan. The setup fee needs no separate handling - it rode along on the same charge and its own tax document is issued automatically.
+5. If the price has a trial, only the ₪49 setup fee is charged now (status `trialing`); the plan's first ₪99 is charged when the trial ends.
+
+Result: plan + one-time fee collected in a single redirect, fulfilment driven by the subscription and charge webhooks.
 
 ## Bundled Resources
 

@@ -147,6 +147,28 @@ charge.succeeded               (first paid period)
 subscription.updated           (status: active)
 ```
 
+### Mixed checkout (recurring plan + one-time line items)
+Created by sending both `price` (recurring) and `line_items` to `/checkout_sessions`. The subscription event fires first, then the immediate charge.
+
+No trial - line items + first plan period charged together:
+```
+subscription.created           (status: active)
+charge.succeeded               (line items + plan first period)
+```
+With a trial - only the one-time line items are charged now; the plan is charged at trial end:
+```
+subscription.created           (status: trialing, trial_end set)
+charge.succeeded               (line items only)
+[on trial_end]
+charge.succeeded               (first plan period)
+subscription.updated           (status: active)
+```
+If the immediate charge declines, the subscription is left `incomplete` and the session stays open for retry (a retry reuses the same subscription and emits `subscription.updated` instead of `subscription.created`):
+```
+subscription.created           (status: incomplete)
+charge.failed
+```
+
 ### Manual capture (J4J5)
 ```
 charge.authorized              (Grow J5 hold, awaiting capture or cancel)
