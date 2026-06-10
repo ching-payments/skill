@@ -293,7 +293,12 @@ const session = await ching('/checkout_sessions', {
 });
 ```
 
-`line_items` accepts `name` (required), `amount_agorot` (required, signed - negatives render as discount lines), `quantity` (default 1, max 1000), `description?`, `image_url?` (must be https://). The cart total across all lines must be >= 0.
+`line_items` accepts `name` (required), `amount_agorot` (required, signed - negatives render as discount lines), `quantity` (default 1, max 1000), `description?`, `image_url?` (must be https://), and optionally `price?` / `product?`. The cart total across all lines must be >= 0.
+
+**Line items and discounts.** A line item is ad-hoc by default - just a name and an amount - and carries **no link to a CHING product or price**. A discount that targets a specific product or price therefore will **not** apply to a bare line item (only order-level discounts reach it). To make a line item eligible for a product/price-targeted discount, set its `price` (the CHING price id it represents; this also resolves the parent product) or `product` (a product id). An unknown id is rejected with `line_item_target_not_found`.
+
+- **Selling CHING-catalog items** (e.g. a setup-fee price you created in CHING, or one-time products you discount): send `price` (or `product`) on each line item so your discounts apply.
+- **Pure e-commerce carts** whose SKUs are NOT CHING products: leave `price`/`product` off. You aren't charging for CHING-created products, so there's nothing to link - those items simply aren't eligible for product/price-targeted discounts (order-level discounts still apply).
 
 Sessions expire **30 minutes** after creation; create a fresh one per checkout attempt. Do not reuse session URLs.
 
@@ -310,8 +315,10 @@ const session = await ching('/checkout_sessions', {
     customer: customer.id,
     price: 'price_recurringMonthly',  // MUST be a recurring price
     line_items: [
-      { name: 'Setup fee', amount_agorot: 4900, quantity: 1 },
-      { name: 'Onboarding session', amount_agorot: 12000, quantity: 1 },
+      // `price` links the line to its CHING price (and parent product) so
+      // product/price-targeted discounts apply. Omit it for ad-hoc items.
+      { name: 'Setup fee', amount_agorot: 4900, quantity: 1, price: 'price_setupFee' },
+      { name: 'Onboarding session', amount_agorot: 12000, quantity: 1, price: 'price_onboarding' },
     ],
     success_url: 'https://app.example.com/billing/success?cs={CHECKOUT_SESSION_ID}',
     cancel_url: 'https://app.example.com/billing/cancel',
@@ -325,6 +332,7 @@ Rules and behaviour:
 
 - **The `price` must be recurring.** A one-time price plus `line_items` is rejected with `mixed_requires_recurring_price` (that combination is just a cart, use `line_items` alone).
 - **`line_items` is the same shape as a cart**: 1 to 50 items, `amount_agorot` is signed (negatives are discount lines), and the total across all lines must be `>= 0` (`cart_total_invalid` otherwise).
+- **For discounts to apply to the one-time items, set each item's `price` (or `product`).** Without it the line is ad-hoc and only order-level discounts reach it (see "Line items and discounts" above). Not needed for e-commerce SKUs that aren't CHING products.
 - **`capture_method: 'manual'` is rejected** (`capture_method_not_supported_for_mixed`). Mixed always settles through the saved-card flow because it must store a card for renewals; a J5 hold can't authorize a recurring token. Express wallets are disabled on mixed sessions for the same reason.
 - **Billing timing depends on the trial:**
   - No trial -> the customer is charged `line_items_total + plan_first_period` immediately and the subscription starts `active`.
@@ -427,6 +435,56 @@ Cancel:
 await ching(`/subscriptions/sub_AbCd/cancel`, { method: 'POST' });
 ```
 
+### Step 6b: Discounts and coupons (optional)
+
+A **discount rule** (`disc_*`) reduces what a customer pays. Create it once, then it applies either **automatically** (whenever a matching product/price/order is bought) or via a **code** the customer enters. Rules target the whole `order`, specific `products`, or specific `prices`, and carry a `duration` (`once`, `n_charges`, `until_date`, `forever`) that controls how long they keep reducing a subscription's charges.
+
+```js
+// A "code" rule: 25% off a specific plan, for the first 3 charges.
+const disc = await ching('/discounts', {
+  method: 'POST',
+  body: JSON.stringify({
+    name: 'Launch 25%',
+    redemption: 'code',
+    code: 'LAUNCH25',          // UPPERCASE, [A-Z0-9_-], not unique
+    target_type: 'prices',
+    targets: ['price_recurringMonthly'],
+    value_type: 'percent',
+    value: 2500,               // basis points: 2500 = 25%
+    duration: 'n_charges',
+    duration_charges: 3,
+  }),
+});
+// disc.id -> "disc_..."
+```
+
+`value_type` is `percent` (basis points), `amount` (agorot off; needs `currency`), or `override` (agorot target unit price; needs `currency`, optional `value_tax_mode`). Only `name`, `active`, the active window, the redemption caps, and `metadata` are editable after creation - value/type/target/duration are frozen so already-applied discounts keep their terms. Archive a rule with `POST /discounts/:id/archive`; already-attached discounts run out their own duration.
+
+Apply a code three ways:
+
+```js
+// 1. Pre-applied on a hosted checkout session (shows as a removable chip).
+await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({ customer, success_url, cancel_url, price, coupon_codes: ['LAUNCH25'] }),
+});
+
+// 2. On the hosted page itself (public, no auth): POST /checkout_sessions/:id/discount { code }
+//    and DELETE /checkout_sessions/:id/discount/:code to remove. The public GET
+//    returns a live discount preview (discounts, discount_lines, total_discount_agorot).
+
+// 3. Directly when creating a subscription over the API:
+await ching('/subscriptions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer, price: 'price_recurringMonthly', payment_method,
+    discounts: [{ code: 'LAUNCH25' }],   // or { discount: 'disc_...' }
+  }),
+});
+```
+
+Each attached rule becomes an **applied discount** (`di_*`, status `active` → `completed`/`canceled`). The webhooks are `discount.created`/`updated`/`deleted` (rule lifecycle) and `discount.applied`/`discount.expired` (per-subscription). See `references/api-endpoints.md` for the full field list and `references/webhook-events.md` for payloads.
+
 ### Step 7: Verify and handle webhooks
 
 This is the single most important security step. Verify every webhook with HMAC-SHA256 over the raw body.
@@ -479,6 +537,8 @@ Event types you must handle for a basic SaaS:
 | `setup_session.failed` | Show retry UI |
 | `setup_session.expired` | Show retry UI |
 | `refund.created` | Update internal accounting |
+| `discount.applied` | (if you use coupons) A discount attached to a subscription; payload is an `applied_discount` |
+| `discount.expired` | (if you use coupons) A subscription discount's duration ran out; charges return to full price |
 
 Full payload structure and the complete event catalog are in `references/webhook-events.md`.
 

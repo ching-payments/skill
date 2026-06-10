@@ -126,6 +126,14 @@ A standalone CLI verifier is bundled at `scripts/verify-webhook.py`.
 | `subscription.trial_will_end` | Fires 3 days before `trial_end`. Use to email an "add card" CTA. | Subscription |
 | `setup_session.failed` | The customer entered card details but the save failed. | Setup session (`seti_*`) |
 | `setup_session.expired` | 24h passed and the customer never opened or completed the session. | Setup session |
+| `customer.created` | A customer was created (`POST /customers` or upsert with no match). | Customer (`cus_*`) |
+| `customer.updated` | A customer's details changed (`POST /customers/:id` or upsert that patched a match). | Customer |
+| `customer.deleted` | A customer was soft-deleted via `DELETE /customers/:id`. | Customer |
+| `discount.created` | A discount rule was created via `POST /discounts`. | Discount (`disc_*`) |
+| `discount.updated` | A rule's mutable fields or its targets changed. | Discount |
+| `discount.deleted` | A rule was archived (soft-deleted) via `POST /discounts/:id/archive`. | Discount |
+| `discount.applied` | A rule was attached to a subscription (at checkout-confirm or subscription create) and became an applied-discount. `data` is an `applied_discount`: `{ object, subscription, discount_row_id, livemode, created }`. | Applied discount |
+| `discount.expired` | An applied-discount's `duration` ran out at a renewal (its `status` moved to `completed`); it no longer reduces future charges. Same `applied_discount` payload. | Applied discount |
 
 ## Lifecycle examples
 
@@ -167,6 +175,21 @@ If the immediate charge declines, the subscription is left `incomplete` and the 
 ```
 subscription.created           (status: incomplete)
 charge.failed
+```
+
+### Discounted subscription (e.g. "50% off for 3 charges")
+A code is applied at checkout (or `discounts` passed to `POST /subscriptions`), the rule attaches as an applied-discount, then expires once its `duration` runs out.
+```
+subscription.created           (status: active)
+discount.applied               (applied_discount attached, status: active)
+charge.succeeded               (first period, reduced)
+[renewal 2]
+charge.succeeded               (reduced)
+[renewal 3]
+charge.succeeded               (reduced - 3rd and last reduced charge)
+discount.expired               (applied_discount completed)
+[renewal 4]
+charge.succeeded               (full price)
 ```
 
 ### Manual capture (J4J5)

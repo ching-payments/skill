@@ -227,7 +227,12 @@ const session = await ching('/checkout_sessions', {
 return Response.redirect(session.url, 303);
 ```
 
-לעגלה שולחים `line_items: [{ name, description, image_url, amount_agorot, quantity }]` במקום `price`. אם שולחים גם `price` (מחזורי) וגם `line_items` יחד, זה **mixed checkout** - מנוי בתוספת פריטים חד-פעמיים באותה session (ראו למטה).
+לעגלה שולחים `line_items: [{ name, description, image_url, amount_agorot, quantity, price?, product? }]` במקום `price`. אם שולחים גם `price` (מחזורי) וגם `line_items` יחד, זה **mixed checkout** - מנוי בתוספת פריטים חד-פעמיים באותה session (ראו למטה).
+
+**פריטי שורה והנחות.** פריט שורה הוא ad-hoc כברירת מחדל - רק שם וסכום - ואין לו קישור למוצר/מחיר ב-CHING. לכן הנחה שמכוונת למוצר או מחיר ספציפי **לא** תחול על פריט שורה רגיל (רק הנחות ברמת ההזמנה חלות עליו). כדי שפריט שורה יהיה זכאי להנחה ממוקדת מוצר/מחיר, מציינים בו `price` (מזהה המחיר ב-CHING שהפריט מייצג - זה גם מאתר את המוצר ההורה) או `product` (מזהה מוצר). מזהה לא קיים נדחה עם `line_item_target_not_found`.
+
+- **מכירת פריטים מקטלוג CHING** (למשל מחיר דמי-הקמה שיצרתם ב-CHING, או מוצרים חד-פעמיים שאתם רוצים להחיל עליהם הנחה): שלחו `price` (או `product`) בכל פריט שורה כדי שההנחות יחולו.
+- **עגלות e-commerce טהורות** שה-SKU שלהן אינם מוצרי CHING: השאירו את `price`/`product` ריקים. אתם לא מחייבים על מוצרים שנוצרו ב-CHING, אז אין מה לקשר - הפריטים האלה פשוט לא זכאים להנחות ממוקדות מוצר/מחיר (הנחות ברמת ההזמנה עדיין חלות).
 
 Sessions פגות תוקף 30 דקות אחרי יצירה. יוצרים אחת חדשה לכל ניסיון checkout. אסור לעשות שימוש חוזר ב-URL של session.
 
@@ -279,8 +284,10 @@ const session = await ching('/checkout_sessions', {
     customer: customer.id,
     price: 'price_recurringMonthly',  // חייב להיות מחיר מחזורי
     line_items: [
-      { name: 'דמי הקמה', amount_agorot: 4900, quantity: 1 },
-      { name: 'פגישת onboarding', amount_agorot: 12000, quantity: 1 },
+      // `price` מקשר את הפריט למחיר ב-CHING (ולמוצר ההורה) כדי שהנחות
+      // ממוקדות מוצר/מחיר יחולו. משמיטים אותו לפריטים ad-hoc.
+      { name: 'דמי הקמה', amount_agorot: 4900, quantity: 1, price: 'price_setupFee' },
+      { name: 'פגישת onboarding', amount_agorot: 12000, quantity: 1, price: 'price_onboarding' },
     ],
     success_url: 'https://app.example.com/billing/success?cs={CHECKOUT_SESSION_ID}',
     cancel_url: 'https://app.example.com/billing/cancel',
@@ -294,6 +301,7 @@ return Response.redirect(session.url, 303);
 
 - **ה-`price` חייב להיות מחזורי.** מחיר חד-פעמי יחד עם `line_items` נדחה עם `mixed_requires_recurring_price` (זו פשוט עגלה, השתמשו ב-`line_items` לבד).
 - **`line_items` באותו מבנה כמו עגלה**: 1 עד 50 פריטים, `amount_agorot` חתום (שלילי = שורת הנחה), והסכום הכולל חייב להיות `>= 0` (אחרת `cart_total_invalid`).
+- **כדי שהנחות יחולו על הפריטים החד-פעמיים, מציינים בכל פריט `price` (או `product`).** בלי זה הפריט הוא ad-hoc ורק הנחות ברמת ההזמנה חלות עליו (ראו "פריטי שורה והנחות" למעלה). לא נדרש ל-SKU של e-commerce שאינם מוצרי CHING.
 - **`capture_method: 'manual'` נדחה** (`capture_method_not_supported_for_mixed`). mixed תמיד עובר דרך מסלול הכרטיס השמור כי חייבים לשמור כרטיס לחידושים; J5 hold לא יכול לאשר טוקן מחזורי. ארנקים מהירים מושבתים ב-sessions מסוג mixed מאותה סיבה.
 - **תזמון החיוב תלוי ב-trial:**
   - בלי trial -> הלקוח מחויב `line_items_total + plan_first_period` מיד והמנוי מתחיל ב-`active`.
@@ -396,6 +404,56 @@ const sub = await ching('/subscriptions', {
 await ching(`/subscriptions/sub_AbCd/cancel`, { method: 'POST' });
 ```
 
+### שלב 6b: הנחות וקופונים (אופציונלי)
+
+**כלל הנחה** (`disc_*`) מקטין את הסכום שהלקוח משלם. יוצרים אותו פעם אחת, ואז הוא חל **אוטומטית** (בכל פעם שנקנה מוצר/מחיר/הזמנה תואמים) או דרך **קוד** שהלקוח מקליד. כללים מכוונים להזמנה כולה (`order`), למוצרים ספציפיים (`products`) או למחירים ספציפיים (`prices`), ונושאים `duration` (`once`, `n_charges`, `until_date`, `forever`) שקובע כמה זמן הם ממשיכים להקטין את חיובי המנוי.
+
+```js
+// כלל "code": 25% הנחה על מחיר ספציפי, ל-3 החיובים הראשונים.
+const disc = await ching('/discounts', {
+  method: 'POST',
+  body: JSON.stringify({
+    name: 'Launch 25%',
+    redemption: 'code',
+    code: 'LAUNCH25',          // אותיות גדולות, [A-Z0-9_-], לא ייחודי
+    target_type: 'prices',
+    targets: ['price_recurringMonthly'],
+    value_type: 'percent',
+    value: 2500,               // basis points: 2500 = 25%
+    duration: 'n_charges',
+    duration_charges: 3,
+  }),
+});
+// disc.id -> "disc_..."
+```
+
+`value_type` הוא `percent` (basis points), `amount` (אגורות להפחתה; דורש `currency`), או `override` (אגורות כמחיר יחידה היעד; דורש `currency`, ו-`value_tax_mode` אופציונלי). אחרי היצירה ניתנים לעריכה רק `name`, `active`, חלון ה-active, מכסות ה-redemption, ו-`metadata` - value/type/target/duration מוקפאים כדי שהנחות שכבר הוחלו ישמרו על התנאים שלהן. ארכוב כלל עם `POST /discounts/:id/archive`; הנחות שכבר משויכות ממצות את ה-duration שלהן.
+
+מחילים קוד בשלוש דרכים:
+
+```js
+// 1. מוחל מראש על checkout session מתארח (מוצג כצ'יפ שניתן להסרה).
+await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({ customer, success_url, cancel_url, price, coupon_codes: ['LAUNCH25'] }),
+});
+
+// 2. על הדף המתארח עצמו (ציבורי, ללא auth): POST /checkout_sessions/:id/discount { code }
+//    ו-DELETE /checkout_sessions/:id/discount/:code להסרה. ה-GET הציבורי מחזיר
+//    תצוגה מקדימה חיה של ההנחה (discounts, discount_lines, total_discount_agorot).
+
+// 3. ישירות ביצירת מנוי דרך ה-API:
+await ching('/subscriptions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer, price: 'price_recurringMonthly', payment_method,
+    discounts: [{ code: 'LAUNCH25' }],   // או { discount: 'disc_...' }
+  }),
+});
+```
+
+כל כלל שמשויך הופך ל**הנחה מוחלת** (`di_*`, סטטוס `active` → `completed`/`canceled`). הוובהוקים הם `discount.created`/`updated`/`deleted` (מחזור חיי הכלל) ו-`discount.applied`/`discount.expired` (לכל מנוי). פירוט שדות מלא ב-`references/api-endpoints.md` ו-payloads ב-`references/webhook-events.md`.
+
 ### שלב 7: אימות וטיפול בוובהוקים
 
 זה צעד האבטחה הקריטי ביותר. מאמתים כל וובהוק עם HMAC-SHA256 על גוף הבקשה הגולמי.
@@ -447,6 +505,8 @@ app.post('/webhooks/ching',
 | `setup_session.failed` | UI של retry |
 | `setup_session.expired` | UI של retry |
 | `refund.created` | עדכון חשבונאות פנימית |
+| `discount.applied` | (אם משתמשים בקופונים) הנחה שויכה למנוי; ה-payload הוא `applied_discount` |
+| `discount.expired` | (אם משתמשים בקופונים) ה-duration של הנחת מנוי הסתיים; החיובים חוזרים למחיר מלא |
 
 מבנה payload מלא וקטלוג האירועים המלא ב-`references/webhook-events.md`.
 
