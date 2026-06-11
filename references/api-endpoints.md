@@ -106,8 +106,8 @@ Statuses: `pending`, `requires_action`, `succeeded`, `canceled`, `failed`, `expi
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/subscriptions` | Create. Required: `customer`, `price` (must be recurring). Optional: `payment_method` (required for paid prices; may be omitted only when the price has `unit_amount === 0`), `discounts` (array of `{ code }` or `{ discount: "disc_*" }` entries to attach; automatic product/price rules targeting this price attach on their own too), `metadata`. Each attached rule becomes an `applied_discount` (`di_*`) that reduces the first and renewal charges for its `duration`. |
-| GET | `/subscriptions/:id` | Retrieve. |
-| GET | `/subscriptions` | List up to 100 most-recent. Query parameters are not honoured. |
+| GET | `/subscriptions/:id` | Retrieve (expanded `items`). Also returns a next-charge estimate: `next_charge_subtotal` (gross before discounts), `next_charge_discount_amount`, `next_charge_amount` (charged amount = subtotal - discount), all agorot, plus `next_charge_discounts` (one entry per discount reducing that charge: `name`, `value_type`, `value`, `duration`, `amount_off`, and `charges_remaining` for `n_charges` / `ends_at` for `until_date`, both null otherwise). Empty/absent when no discount applies. GET-only - not on list or create. |
+| GET | `/subscriptions` | List up to 100 most-recent (each row carries `customer_name`; `items` empty and the `next_charge_*` estimate omitted - fetch the single subscription for those). Query parameters are not honoured. |
 | POST | `/subscriptions/:id/cancel` | Cancel. Optional body: `cancel_at_period_end` (boolean, default false). |
 | GET | `/subscriptions/:id/public` | Customer-facing, uses callback token. |
 

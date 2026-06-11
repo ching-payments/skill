@@ -435,6 +435,21 @@ Cancel:
 await ching(`/subscriptions/sub_AbCd/cancel`, { method: 'POST' });
 ```
 
+Show the upcoming charge: `GET /subscriptions/:id` returns a next-charge estimate so you can render the renewal price (with any discount) in your UI:
+
+```js
+const { data: sub } = await ching('/subscriptions/sub_AbCd');
+// next_charge_subtotal:        41300  // gross before discounts (agorot)
+// next_charge_discount_amount: 18054  // total reduction
+// next_charge_amount:          23246  // what will actually be charged (subtotal - discount)
+// next_charge_discounts: [
+//   { name: 'Reserve duty fair', value_type: 'override', value: 19700,
+//     duration: 'forever', charges_remaining: null, ends_at: null, amount_off: 18054 },
+// ]
+```
+
+`next_charge_discounts` lists each discount reducing that charge. `charges_remaining` is set only for `n_charges` (discounted charges left, including the upcoming one); `ends_at` only for `until_date`; both are null for `once`/`forever`. The array is empty when nothing applies and drops a discount once it completes or expires - so it always reflects the live next charge. These `next_charge_*` fields are on the single GET only, not on list or create.
+
 ### Step 6b: Discounts and coupons (optional)
 
 A **discount rule** (`disc_*`) reduces what a customer pays. Create it once, then it applies either **automatically** (whenever a matching product/price/order is bought) or via a **code** the customer enters. Rules target the whole `order`, specific `products`, or specific `prices`, and carry a `duration` (`once`, `n_charges`, `until_date`, `forever`) that controls how long they keep reducing a subscription's charges.

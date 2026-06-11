@@ -404,6 +404,21 @@ const sub = await ching('/subscriptions', {
 await ching(`/subscriptions/sub_AbCd/cancel`, { method: 'POST' });
 ```
 
+הצגת החיוב הבא: `GET /subscriptions/:id` מחזיר הערכה של החיוב הבא כדי שתוכלו להציג את מחיר החידוש (כולל הנחה) בממשק שלכם:
+
+```js
+const { data: sub } = await ching('/subscriptions/sub_AbCd');
+// next_charge_subtotal:        41300  // ברוטו לפני הנחות (אגורות)
+// next_charge_discount_amount: 18054  // סך ההנחה
+// next_charge_amount:          23246  // הסכום שיחויב בפועל (subtotal - discount)
+// next_charge_discounts: [
+//   { name: 'יריד מילואים', value_type: 'override', value: 19700,
+//     duration: 'forever', charges_remaining: null, ends_at: null, amount_off: 18054 },
+// ]
+```
+
+`next_charge_discounts` מפרט כל הנחה שמקטינה את החיוב הזה. `charges_remaining` מאוכלס רק עבור `n_charges` (כמה חיובים מוזלים נותרו, כולל הקרוב); `ends_at` רק עבור `until_date`; שניהם `null` עבור `once`/`forever`. המערך ריק כשאין הנחה, ומסיר הנחה ברגע שהיא הושלמה או פגה - כך שהוא תמיד משקף את החיוב הבא בפועל. שדות ה-`next_charge_*` קיימים ב-GET הבודד בלבד, לא ב-list או ב-create.
+
 ### שלב 6b: הנחות וקופונים (אופציונלי)
 
 **כלל הנחה** (`disc_*`) מקטין את הסכום שהלקוח משלם. יוצרים אותו פעם אחת, ואז הוא חל **אוטומטית** (בכל פעם שנקנה מוצר/מחיר/הזמנה תואמים) או דרך **קוד** שהלקוח מקליד. כללים מכוונים להזמנה כולה (`order`), למוצרים ספציפיים (`products`) או למחירים ספציפיים (`prices`), ונושאים `duration` (`once`, `n_charges`, `until_date`, `forever`) שקובע כמה זמן הם ממשיכים להקטין את חיובי המנוי.
