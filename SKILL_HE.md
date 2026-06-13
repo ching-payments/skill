@@ -9,8 +9,8 @@ description: >-
   webhooks for charge.succeeded, build a hosted billing flow for
   ILS, or use the @ching-payments/cli to scaffold products and prices.
   Covers ck_test_/ck_live_ keys, agorot amounts, HMAC webhook
-  verification, and the redirect-only checkout/setup flow at
-  secured.ching.co.il. Do NOT use for non-Israeli payment processors
+  verification, the hosted checkout/setup flow at secured.ching.co.il,
+  and the button-only embedded (iframe) checkout. Do NOT use for non-Israeli payment processors
   or for Glance accounting/invoicing flows unrelated to CHING payments.
 license: MIT
 allowed-tools: 'Bash(npx:*) Bash(python3:*) WebFetch'
@@ -349,6 +349,47 @@ await ching(`/charges/${chargeId}/cancel`, {
 - תקף רק למחירים חד-פעמיים ולעגלות עם כרטיס חדש. מחירים recurring נדחים; כרטיסים שמורים וארנקים מהירים (Apple Pay / Bit / Google Pay) מתעלמים מהדגל ונשארים automatic.
 - ביטול משחרר את הרשומה ב-CHING מיידית, אבל הבנק של הלקוח עשוי לקחת עד **10 ימים** להסיר את ההזמנה ממסגרת האשראי הזמינה (חלון השחרור האוטומטי של Grow). הסבירו את זה ללקוח.
 - ה-sweep היומי מבטל הזמנות שלא טופלו ב-`capturable_until` (כ-7 ימים) עם `cancellation_reason: 'expired'`.
+
+#### Checkout מוטמע (iframe עם כפתורים בלבד)
+
+כשלא רוצים להפנות את הלקוח לדף חיצוני, אפשר להטמיע את ה-checkout כווידג'ט של כפתורים בלבד בדף שלכם. יוצרים session של **מחיר חד-פעמי או עגלה** כרגיל; בתשובת היצירה יש `embed_url` (`https://secured.ching.co.il/checkout/:id/embed`) ליד ה-`url` של ההפניה. מטמיעים אותו ב-`<iframe>` והוא מציג רק את כפתורי "שלם N ב..." - בלי סיכום הזמנה ובלי עיצוב מסביב.
+
+שני שדות אופציונליים מתאימים את ההטמעה (שניהם מתעלמים מהם ב-checkout המופנה הרגיל):
+- `payment_methods`: מערך של `"card"` ו/או `"wallet"` - אילו כפתורים להציג. השמטה או `[]` = שניהם (ברירת המחדל). **נדחה ל-sessions מסוג recurring ו-mixed** (`payment_methods_not_supported_for_recurring`); checkout מוטמע הוא לחיוב מיידי בלבד.
+- `background_color`: צבע hex (`#rgb`/`#rrggbb`/`#rrggbbaa`) לרקע ההטמעה. ההטמעה גוזרת ממנו צבעי טקסט קריאים (רקע כהה מקבל טקסט בהיר). ברירת המחדל לבן.
+
+```js
+// שרת: יצירת ה-session עם אפשרויות ההטמעה.
+const session = await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: customer.id,
+    line_items: [{ name: 'Pro upgrade', amount_agorot: 4990, quantity: 1 }],
+    payment_methods: ['card', 'wallet'],   // השמטה או [] = שניהם
+    background_color: '#0b0d10',            // אופציונלי
+    success_url: 'https://app.example.com/billing/success',
+    cancel_url: 'https://app.example.com/billing/cancel',
+  }),
+});
+// session.embed_url -> מעבירים ללקוח כדי להטמיע ב-iframe.
+```
+
+```html
+<!-- לקוח: allow="payment" הוא חובה, אחרת הדפדפן חוסם את Apple Pay /
+     Google Pay (כפתור הכרטיס עדיין עובד). שני הדפים חייבים להיות HTTPS. -->
+<iframe src="https://secured.ching.co.il/checkout/co_…/embed"
+        allow="payment" style="width:100%;max-width:420px;height:560px;border:0">
+</iframe>
+<script>
+  window.addEventListener('message', (e) => {
+    if (e.data?.type !== 'ching-checkout-result') return;
+    // { type:'ching-checkout-result', status:'success'|'failed', session_id }
+    if (e.data.status === 'success') showThankYou();
+  });
+</script>
+```
+
+הודעת `ching-checkout-result` היא **סיגנל UX בלבד** - מבצעים fulfilment לפי הוובהוק `charge.succeeded` (שלב 7), אף פעם לא לפי ההודעה לבד. Apple Pay / Google Pay נקשרים ל-`secured.ching.co.il` (אין צורך ברישום דומיין פר-סוחר אצל Apple), אבל נטענים רק כשל-iframe יש `allow="payment"`, אז התייחסו לארנקים כאל best-effort עם כפתור הכרטיס כגיבוי האמין. להטמעה אין שינוי גודל אוטומטי; קבעו את גובה ה-iframe בעצמכם (מסך הכרטיס נפתח inline, אז אפשרו גובה של כ-560px).
 
 ### שלב 5: שמירת כרטיס בלי לחייב (Setup Sessions)
 

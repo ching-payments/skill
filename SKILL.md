@@ -9,8 +9,8 @@ description: >-
   webhooks for charge.succeeded, build a hosted billing flow for
   ILS, or use the @ching-payments/cli to scaffold products and prices.
   Covers ck_test_/ck_live_ keys, agorot amounts, HMAC webhook
-  verification, and the redirect-only checkout/setup flow at
-  secured.ching.co.il. Do NOT use for non-Israeli payment processors
+  verification, the hosted checkout/setup flow at secured.ching.co.il,
+  and the button-only embedded (iframe) checkout. Do NOT use for non-Israeli payment processors
   or for Glance accounting/invoicing flows unrelated to CHING payments.
 license: MIT
 allowed-tools: 'Bash(npx:*) Bash(python3:*) WebFetch'
@@ -380,6 +380,47 @@ Constraints to remember:
 - Only valid for one-time prices and carts with a new card. Recurring prices are rejected; saved cards and express wallets (Apple Pay / Bit / Google Pay) ignore the flag and stay automatic.
 - Cancellation releases the CHING-side record immediately, but the customer's bank may take up to **10 days** to remove the hold from their available balance (Grow's auto-release window). Tell your customer this.
 - The daily sweep auto-cancels held charges at `capturable_until` (~7 days) with `cancellation_reason: 'expired'`.
+
+#### Embedded checkout (button-only iframe)
+
+When you don't want to redirect away, embed checkout as a button-only widget on your own page. Create a **one-time price or cart** session as usual; the create response includes an `embed_url` (`https://secured.ching.co.il/checkout/:id/embed`) next to the redirect `url`. Render that URL in an `<iframe>` and it shows just the "Pay N using…" buttons - no order summary, no chrome.
+
+Two optional fields tailor the embed (both ignored by the hosted redirect checkout):
+- `payment_methods`: array of `"card"` and/or `"wallet"` - which buttons to show. Omit or send `[]` for both (the default). **Rejected for recurring and mixed sessions** (`payment_methods_not_supported_for_recurring`); embedded checkout is immediate-charge only.
+- `background_color`: a CSS hex (`#rgb`/`#rrggbb`/`#rrggbbaa`) for the embed background. The embed derives readable text colors from it (a dark background gets light text). Defaults to white.
+
+```js
+// Server: create the session with the embed options.
+const session = await ching('/checkout_sessions', {
+  method: 'POST',
+  body: JSON.stringify({
+    customer: customer.id,
+    line_items: [{ name: 'Pro upgrade', amount_agorot: 4990, quantity: 1 }],
+    payment_methods: ['card', 'wallet'],   // omit or [] for both
+    background_color: '#0b0d10',            // optional
+    success_url: 'https://app.example.com/billing/success',
+    cancel_url: 'https://app.example.com/billing/cancel',
+  }),
+});
+// session.embed_url -> hand to the client to iframe.
+```
+
+```html
+<!-- Client: allow="payment" is REQUIRED or the browser blocks Apple Pay /
+     Google Pay (the card button still works). Both pages must be HTTPS. -->
+<iframe src="https://secured.ching.co.il/checkout/co_…/embed"
+        allow="payment" style="width:100%;max-width:420px;height:560px;border:0">
+</iframe>
+<script>
+  window.addEventListener('message', (e) => {
+    if (e.data?.type !== 'ching-checkout-result') return;
+    // { type:'ching-checkout-result', status:'success'|'failed', session_id }
+    if (e.data.status === 'success') showThankYou();
+  });
+</script>
+```
+
+The `ching-checkout-result` message is a **UX signal only** - fulfil on the `charge.succeeded` webhook (Step 7), never on the message alone. Apple Pay / Google Pay bind to `secured.ching.co.il` (no per-merchant Apple registration needed), but only render when the iframe has `allow="payment"`, so treat wallets as best-effort with the card button as the reliable fallback. The embed has no auto-resize; size the iframe yourself (the card flow expands inline, so allow ~560px height).
 
 ### Step 5: Save a card without charging (Setup Sessions)
 
