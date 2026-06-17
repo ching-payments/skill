@@ -385,9 +385,10 @@ Constraints to remember:
 
 When you don't want to redirect away, embed checkout as a button-only widget on your own page. Create a **one-time price or cart** session as usual; the create response includes an `embed_url` (`https://secured.ching.co.il/checkout/:id/embed`) next to the redirect `url`. Render that URL in an `<iframe>` and it shows just the "Pay N using…" buttons - no order summary, no chrome.
 
-Two optional fields tailor the embed (both ignored by the hosted redirect checkout):
+Three optional fields tailor the embed (all ignored by the hosted redirect checkout):
 - `payment_methods`: array of `"card"` and/or `"wallet"` - which buttons to show. Omit or send `[]` for both (the default). **Rejected for recurring and mixed sessions** (`payment_methods_not_supported_for_recurring`); embedded checkout is immediate-charge only.
 - `background_color`: a CSS hex (`#rgb`/`#rrggbb`/`#rrggbbaa`) for the embed background. The embed derives readable text colors from it (a dark background gets light text). Defaults to white.
+- `auto_open_wallets`: boolean. When `true` the embed opens the digital-wallet sheet (Bit / Apple Pay / Google Pay) automatically on load instead of waiting for the wallet button - showing a short loader while it loads, and falling back to the buttons if the customer dismisses it. Requires wallets (express checkout) enabled for your account and `"wallet"` among `payment_methods`. Rejected with `express_checkout_disabled` (wallets off), `auto_open_wallets_requires_wallet` (`payment_methods` excludes wallet), `auto_open_wallets_not_supported_for_recurring` (recurring/mixed), and not supported with `capture_method: 'manual'`.
 
 ```js
 // Server: create the session with the embed options.
@@ -398,6 +399,7 @@ const session = await ching('/checkout_sessions', {
     line_items: [{ name: 'Pro upgrade', amount_agorot: 4990, quantity: 1 }],
     payment_methods: ['card', 'wallet'],   // omit or [] for both
     background_color: '#0b0d10',            // optional
+    auto_open_wallets: true,                // optional: open the wallet sheet on load
     success_url: 'https://app.example.com/billing/success',
     cancel_url: 'https://app.example.com/billing/cancel',
   }),

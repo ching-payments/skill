@@ -354,9 +354,10 @@ await ching(`/charges/${chargeId}/cancel`, {
 
 כשלא רוצים להפנות את הלקוח לדף חיצוני, אפשר להטמיע את ה-checkout כווידג'ט של כפתורים בלבד בדף שלכם. יוצרים session של **מחיר חד-פעמי או עגלה** כרגיל; בתשובת היצירה יש `embed_url` (`https://secured.ching.co.il/checkout/:id/embed`) ליד ה-`url` של ההפניה. מטמיעים אותו ב-`<iframe>` והוא מציג רק את כפתורי "שלם N ב..." - בלי סיכום הזמנה ובלי עיצוב מסביב.
 
-שני שדות אופציונליים מתאימים את ההטמעה (שניהם מתעלמים מהם ב-checkout המופנה הרגיל):
+שלושה שדות אופציונליים מתאימים את ההטמעה (בכולם מתעלמים ב-checkout המופנה הרגיל):
 - `payment_methods`: מערך של `"card"` ו/או `"wallet"` - אילו כפתורים להציג. השמטה או `[]` = שניהם (ברירת המחדל). **נדחה ל-sessions מסוג recurring ו-mixed** (`payment_methods_not_supported_for_recurring`); checkout מוטמע הוא לחיוב מיידי בלבד.
 - `background_color`: צבע hex (`#rgb`/`#rrggbb`/`#rrggbbaa`) לרקע ההטמעה. ההטמעה גוזרת ממנו צבעי טקסט קריאים (רקע כהה מקבל טקסט בהיר). ברירת המחדל לבן.
+- `auto_open_wallets`: boolean. כש-`true` ההטמעה פותחת את חלונית הארנק הדיגיטלי (Bit / Apple Pay / Google Pay) אוטומטית בטעינה במקום להמתין ללחיצה על כפתור הארנק - מציגה loader קצר בזמן הטעינה, וחוזרת לכפתורים אם הלקוח סוגר את החלונית. דורש שארנקים (express checkout) יהיו מופעלים בחשבון ושה-`"wallet"` יהיה כלול ב-`payment_methods`. נדחה עם `express_checkout_disabled` (ארנקים כבויים), `auto_open_wallets_requires_wallet` (כש-`payment_methods` לא כולל wallet), `auto_open_wallets_not_supported_for_recurring` (recurring/mixed), ולא נתמך עם `capture_method: 'manual'`.
 
 ```js
 // שרת: יצירת ה-session עם אפשרויות ההטמעה.
@@ -367,6 +368,7 @@ const session = await ching('/checkout_sessions', {
     line_items: [{ name: 'Pro upgrade', amount_agorot: 4990, quantity: 1 }],
     payment_methods: ['card', 'wallet'],   // השמטה או [] = שניהם
     background_color: '#0b0d10',            // אופציונלי
+    auto_open_wallets: true,                // אופציונלי: פתיחת חלונית הארנק בטעינה
     success_url: 'https://app.example.com/billing/success',
     cancel_url: 'https://app.example.com/billing/cancel',
   }),
