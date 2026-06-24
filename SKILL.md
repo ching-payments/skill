@@ -478,6 +478,22 @@ Cancel:
 await ching(`/subscriptions/sub_AbCd/cancel`, { method: 'POST' });
 ```
 
+Switch or upgrade a plan (without canceling): `POST /subscriptions/:id/change_price` with the target recurring `price`. CHING auto-routes by per-day cost - an **upgrade** applies immediately and is charged **prorated for the days left** in the current period (the renewal date `current_period_end` does not move; the full new price bills at the unchanged renewal), while a **downgrade** is scheduled to take effect at `current_period_end`. The current period is never refunded.
+
+```js
+// Upgrade now - charged the prorated amount for the remaining days.
+const { data } = await ching('/subscriptions/sub_AbCd/change_price', {
+  method: 'POST',
+  body: JSON.stringify({ price: 'price_proMonthly' }),
+});
+// data.kind: 'upgrade' | 'downgrade' | 'same'
+// data.applied: true (live now) | false (scheduled for renewal)
+// data.scheduled_for: ISO date when a scheduled change lands (else null)
+// data.charge_amount: prorated agorot charged now (null if nothing charged)
+```
+
+Use `change_timing` to override the default routing: `at_period_end` defers an upgrade to the next renewal (no charge now); `immediately` forces an upgrade now (the default). A downgrade can only ever apply at period end - `change_timing: 'immediately'` on a downgrade is rejected with `DOWNGRADE_IMMEDIATE_NOT_SUPPORTED` because the current period is never refunded. An applied upgrade issues a tax document (`charge.succeeded`); either path fires `subscription.updated`. While a change is scheduled, the subscription exposes `pending_price`/`pending_effective_at`; switching back to the current price clears it. The hosted Billing Portal runs this same logic for customer self-service.
+
 Show the upcoming charge: `GET /subscriptions/:id` returns a next-charge estimate so you can render the renewal price (with any discount) in your UI:
 
 ```js
